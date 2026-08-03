@@ -35,6 +35,8 @@ func main() {
 
 	writer = NewClickHouseWriter(chURL, 100)
 	queryClient = NewClickHouseQuery(chURL)
+	ensureClickHouseDatabase(queryClient)
+	initAuthMode()
 
 	authRequired := authRequiredEnv()
 	authEnforced = authRequired
@@ -62,11 +64,14 @@ func main() {
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{
-			"status":  "ok",
-			"service": "osa-api",
-			"version": buildVersion,
+			"status":    "ok",
+			"service":   "osa-api",
+			"version":   buildVersion,
+			"database":  clickHouseDatabase(),
+			"auth_mode": string(authMode),
 		})
 	})
+	registerLocalAuthMux(mux)
 
 	registerSecurityRunsMux(mux, authView, authAdmin)
 	registerAppSecMux(mux, authView, authAdmin)
@@ -84,7 +89,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-	log.Printf("osa-api listening on %s (CH=%s)", addr, chURL)
+	log.Printf("osa-api listening on %s (CH=%s db=%s)", addr, chURL, clickHouseDatabase())
 	_ = openjob.RunnerImage("osa", "scan", envOr("OSA_RUNNER_TAG", "smoke"))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %v", err)
