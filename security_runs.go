@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -54,8 +55,12 @@ func handleSecurityProfiles(w http.ResponseWriter, r *http.Request) {
 		secretsNote = "gitleaks CLI (default rules); falls back to embedded lite if the binary fails"
 	}
 	writeJSON(w, map[string]interface{}{
-		"profiles":  profiles,
-		"workspace": ws,
+		"profiles":             profiles,
+		"workspace":            ws,
+		"workspace_role":       "fallback",
+		"primary_target_model": "owner/repo",
+		"peer_ora_configured":  peerORAURL() != "",
+		"peer_opa_configured":  peerOPAURL() != "",
 		"scanners": []map[string]interface{}{
 			{"id": "secrets", "mode": secretsMode, "note": secretsNote, "aliases": []string{"gitleaks"}},
 			{"id": "sast", "mode": "lite"},
@@ -67,7 +72,7 @@ func handleSecurityProfiles(w http.ResponseWriter, r *http.Request) {
 			"available": secretsMode == "gitleaks",
 			"bin_env":   "OPA_GITLEAKS_BIN",
 		},
-		"honesty": "Secrets use gitleaks when installed on the Agent image/PATH; otherwise embedded lite regex. SAST/IaC/container remain lite/stub — not commercial engines. IAST is runtime-only.",
+		"honesty": "Primary targets are GitHub owner/repo via hub tenancy + ORA connectors (ephemeral clones). Local OSA_SECURITY_WORKSPACE is a CI/fallback mount only. Secrets use gitleaks when installed; otherwise embedded lite. SAST/IaC/container remain lite/stub. IAST is runtime-only.",
 	})
 }
 
@@ -210,6 +215,8 @@ type securityRunCreateBody struct {
 	Image         string   `json:"image"`
 	Dispatch      *bool    `json:"dispatch"`
 	RepoFullName  string   `json:"repo_full_name"`
+	ConnectorID   string   `json:"connector_id"`
+	Ref           string   `json:"ref"`
 	PRNumber      int      `json:"pr_number"`
 	CommitSHA     string   `json:"commit_sha"`
 	SCMJobID      string   `json:"scm_job_id"`
@@ -232,15 +239,35 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 	if !enforceWriteLocalityHTTP(w, r, org, proj) {
 		return
 	}
-	service := nz(body.Service, "workspace-scan")
+	repo := strings.TrimSpace(body.RepoFullName)
+	connectorID := strings.TrimSpace(body.ConnectorID)
+	githubTarget := repo != "" && connectorID != ""
+	if repo != "" && connectorID == "" {
+		http.Error(w, "connector_id required with repo_full_name", 400)
+		return
+	}
+	if connectorID != "" && (repo == "" || !strings.Contains(repo, "/")) {
+		http.Error(w, "repo_full_name must be owner/repo when connector_id is set", 400)
+		return
+	}
+	service := body.Service
+	if service == "" {
+		if githubTarget {
+			service = "github-scan"
+		} else {
+			service = "workspace-scan"
+		}
+	}
 	profile := nz(body.Profile, "auto")
 	runID := nz(body.SecurityRunID, securityRunID(org, proj, service, time.Now().UTC().Format(time.RFC3339Nano)))
 	scanners := normalizeSecurityScanners(body.Scanners)
 	if len(scanners) == 0 {
 		if profile == "auto" || profile == "" {
-			root, rerr := resolveSecurityScanPath(body.TargetPath)
-			if rerr == nil {
-				scanners = detectSecurityScanners(root, body.Image)
+			if !githubTarget {
+				root, rerr := resolveSecurityScanPath(body.TargetPath)
+				if rerr == nil {
+					scanners = detectSecurityScanners(root, body.Image)
+				}
 			}
 			if len(scanners) == 0 {
 				scanners = []string{"secrets", "sast"}
@@ -255,12 +282,16 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	scannersJSON, _ := json.Marshal(scanners)
 	now := time.Now().UTC().Format("2006-01-02 15:04:05.000")
+	targetNote := body.TargetPath
+	if githubTarget {
+		targetNote = "ephemeral:" + repo
+	}
 	row := map[string]interface{}{
 		"id": runID, "organization_id": org, "project_id": proj,
 		"service": service, "profile": profile, "scanners_json": string(scannersJSON),
-		"target_path": body.TargetPath, "image": body.Image, "status": "queued",
+		"target_path": targetNote, "image": body.Image, "status": "queued",
 		"summary_json": "{}", "error": "", "started_at": now, "finished_at": now,
-		"repo_full_name": body.RepoFullName, "pr_number": body.PRNumber,
+		"repo_full_name": repo, "pr_number": body.PRNumber,
 		"commit_sha": body.CommitSHA, "scm_job_id": body.SCMJobID,
 	}
 	rememberSecurityRun(row)
@@ -268,13 +299,20 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(row)
 		writer.insertAsync("security_runs", append(payload, '\n'))
 	}
+	honesty := "Secrets via gitleaks when available, else embedded lite; other scanners remain lite/stub."
+	if githubTarget {
+		honesty += " Target is an ephemeral clone of " + repo + " (ORA clone credentials)."
+	} else {
+		honesty += " Fallback path scan against OSA_SECURITY_WORKSPACE when no connector_id/repo_full_name."
+	}
 	out := map[string]interface{}{
 		"ok": true, "id": runID, "security_run_id": runID,
 		"service": service, "profile": profile, "scanners": scanners,
-		"honesty": "Secrets via gitleaks when available, else embedded lite; other scanners remain lite/stub against OPA_SECURITY_WORKSPACE",
+		"repo_full_name": repo, "connector_id": connectorID,
+		"honesty": honesty,
 	}
 	if dispatch {
-		go runSecurityScanJob(runID, org, proj, service, profile, scanners, body.TargetPath, body.Image, body.RepoFullName, body.PRNumber, body.CommitSHA, body.SCMJobID)
+		go runSecurityScanJob(runID, org, proj, service, profile, scanners, body.TargetPath, body.Image, repo, connectorID, body.Ref, body.PRNumber, body.CommitSHA, body.SCMJobID)
 		out["dispatch"] = map[string]interface{}{"dispatched": true}
 		out["status"] = "running"
 	} else {
@@ -282,6 +320,7 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 		out["status"] = "queued"
 	}
 	writeJSON(w, out)
+
 }
 
 var (
@@ -309,34 +348,48 @@ func liveSecurityRun(id string) map[string]interface{} {
 	return nil
 }
 
-func runSecurityScanJob(runID, org, proj, service, profile string, scanners []string, targetPath, image, repo string, pr int, sha, scmJob string) {
-	// Concurrent scans are safe: live run rows use sync.Map (rememberSecurityRun);
-	// per-run secret tallies are keyed by runID and only touched from this job's
-	// goroutine. ClickHouse inserts are async. Do not serialize whole scans.
-	//
-	// OSA does not own SCM checkout. Callers (ORA peer or CI) pass an absolute
-	// target_path or rely on OSA_SECURITY_WORKSPACE / OPA_SECURITY_WORKSPACE.
-
+func runSecurityScanJob(runID, org, proj, service, profile string, scanners []string, targetPath, image, repo, connectorID, ref string, pr int, sha, scmJob string) {
+	githubTarget := strings.TrimSpace(repo) != "" && strings.TrimSpace(connectorID) != ""
+	displayPath := targetPath
+	if githubTarget {
+		displayPath = "ephemeral:" + repo
+	}
 	base := map[string]interface{}{
 		"id": runID, "organization_id": org, "project_id": proj,
-		"service": service, "profile": profile, "target_path": targetPath, "image": image,
+		"service": service, "profile": profile, "target_path": displayPath, "image": image,
 		"repo_full_name": repo, "pr_number": pr, "commit_sha": sha, "scm_job_id": scmJob,
 	}
 	if b, _ := json.Marshal(scanners); true {
 		base["scanners_json"] = string(b)
 	}
 	updateSecurityRun(base, "running", "{}", "")
-	root, err := resolveSecurityScanPath(nz(targetPath, "."))
-	if err != nil {
-		updateSecurityRun(base, "error", "{}", err.Error())
-		return
-	}
-	if st, serr := os.Stat(root); serr != nil || !st.IsDir() {
-		if mkErr := os.MkdirAll(root, 0o755); mkErr != nil {
-			updateSecurityRun(base, "error", "{}", fmt.Sprintf("workspace missing: %v", serr))
+
+	var root string
+	if githubTarget {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		cloned, cerr := ephemeralClone(ctx, connectorID, repo, ref, org)
+		if cerr != nil {
+			updateSecurityRun(base, "error", "{}", cerr.Error())
 			return
 		}
+		root = cloned
+		defer func() { _ = os.RemoveAll(filepath.Dir(cloned)) }()
+	} else {
+		var err error
+		root, err = resolveSecurityScanPath(nz(targetPath, "."))
+		if err != nil {
+			updateSecurityRun(base, "error", "{}", err.Error())
+			return
+		}
+		if st, serr := os.Stat(root); serr != nil || !st.IsDir() {
+			if mkErr := os.MkdirAll(root, 0o755); mkErr != nil {
+				updateSecurityRun(base, "error", "{}", fmt.Sprintf("workspace missing: %v", serr))
+				return
+			}
+		}
 	}
+
 	counts := map[string]int{}
 	severityCounts := map[string]map[string]int{}
 	secretsDetector := ""
@@ -369,9 +422,16 @@ func runSecurityScanJob(runID, org, proj, service, profile string, scanners []st
 			firstErr = e
 		}
 	}
+	honesty := "lite/stub (+ gitleaks for secrets when available)."
+	if githubTarget {
+		honesty += " Scanned ephemeral clone of " + repo + "; credentials from ORA; clone removed after run."
+	} else {
+		honesty += " Fallback workspace path scan (OSA_SECURITY_WORKSPACE)."
+	}
 	summaryBody := map[string]interface{}{
 		"counts": counts, "profile": profile, "root": root,
-		"honesty": "lite/stub (+ gitleaks for secrets when available). Checkout/SCM is owned by ORA; OSA scans a provided path or workspace.",
+		"repo_full_name": repo, "ephemeral_clone": githubTarget,
+		"honesty": honesty,
 	}
 	if len(severityCounts) > 0 {
 		summaryBody["severity_counts"] = severityCounts
@@ -390,8 +450,8 @@ func runSecurityScanJob(runID, org, proj, service, profile string, scanners []st
 		errMsg = firstErr.Error()
 	}
 	updateSecurityRun(base, status, string(summary), errMsg)
-	_ = filepath.Base(root)
 }
+
 
 func updateSecurityRun(base map[string]interface{}, status, summary, errMsg string) {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05.000")
