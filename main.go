@@ -74,6 +74,7 @@ func main() {
 	registerLocalAuthMux(mux)
 
 	registerSecurityRunsMux(mux, authView, authAdmin)
+	registerHubGitHubMux(mux, authView)
 	registerAppSecMux(mux, authView, authAdmin)
 	registerAppSecDeepMux(mux, authView, authAdmin)
 	registerVulnMux(mux, authView, authAdmin)
