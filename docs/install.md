@@ -1,14 +1,17 @@
 # Install
 
-## Local smoke (laptop)
-
-Build and run the `osa-api:smoke` image on a developer machine only.
-
 ```bash
-docker build -t osa-api:smoke .
-docker run --rm -p 8093:8093 osa-api:smoke
+go build -o osa-api .
+./osa-api                  # control plane :8093
+./osa-api orchestrator     # osa-orchestrator
 ```
 
-## Production / NAS
+## Images
 
-Use `osa-api:nas` image tags only. Never deploy `*:smoke` to production hosts.
+```bash
+docker build --target osa-api -t osa-api:smoke .
+docker build --target osa-orchestrator -t osa-orchestrator:smoke .
+docker build --target osa-runner-scan -t osa-runner-scan:smoke .
+```
+
+Production / NAS: tag and deploy `*:nas` only (never `*:smoke` on NAS).
