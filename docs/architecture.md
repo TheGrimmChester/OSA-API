@@ -8,9 +8,16 @@ flowchart LR
   API --> Orch[osa-orchestrator]
   Orch --> Runner[osa-runner-scan]
   API --> CH[(ClickHouse)]
-  ORA[ora-api] -.->|optional peer| API
-  API -.->|optional peer| Hub[opa-hub]
+  API -->|orgs / identity| Hub[opa-hub]
+  API -->|connectors + clone creds| ORA[ora-api]
+  ORA -.->|optional peer findings| API
 ```
+
+## Security targets
+
+Primary UX: **hub org → ORA GitHub connector → `owner/repo`**. OSA clones the repo into a temporary directory for the scan job, then removes it. There is no durable local project registry.
+
+`OSA_SECURITY_WORKSPACE` remains a **fallback** for CI path ingest and lab mounts when `connector_id` / `repo_full_name` are omitted.
 
 ## Ownership
 
@@ -20,6 +27,8 @@ flowchart LR
 | Security runs / profiles | OSA |
 | Vulns / IAST / SBOM ingest | OSA |
 | AppSec CI gate | OSA |
+| Hub identity / tenancy directory | OPA-Hub |
+| GitHub App / PAT connectors | ORA |
 | Review check-runs / Repo Watch | ORA (not OSA) |
 
 ## Containers

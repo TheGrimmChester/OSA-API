@@ -6,12 +6,40 @@ Smoke listen address: `:8093`. Health `service` id: `osa-api`.
 
 `GET /api/health` → `{"status":"ok","service":"osa-api"}`
 
+
+## Hub + GitHub discovery
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/hub/organizations` | Proxy hub tenancy orgs (`PEER_OPA_URL`) |
+| GET | `/api/hub/github/status` | Hub GitHub status + OSA peer config |
+| GET | `/api/github/connectors` | Proxy ORA connectors (`PEER_ORA_URL`) |
+| GET | `/api/github/connectors/{id}/repos` | Proxy ORA repo list |
+| GET | `/api/security/targets` | Discovery model summary for the dashboard |
+
+## Security runs
+
+Create body (GitHub primary):
+
+```json
+{
+  "connector_id": "conn-…",
+  "repo_full_name": "owner/repo",
+  "ref": "main",
+  "profile": "auto",
+  "scanners": ["secrets", "sast"],
+  "dispatch": true
+}
+```
+
+`connector_id` + `repo_full_name` trigger an ephemeral clone via ORA. Omit both to fall back to `target_path` under `OSA_SECURITY_WORKSPACE`.
+
 ## Security runs
 
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/security/profiles` | Scanner profiles (`auto`, `php`, `node`, …) |
-| GET/POST | `/api/security/runs` | List / create security runs |
+| GET/POST | `/api/security/runs` | List / create security runs (`connector_id` + `repo_full_name` preferred) |
 | GET | `/api/security/runs/{id}` | Run detail |
 | GET | `/api/security/runs/{id}/findings` | Findings for a run |
 
