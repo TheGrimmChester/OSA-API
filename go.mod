@@ -1,3 +1,13 @@
 module github.com/TheGrimmChester/osa-api
 
 go 1.22
+
+require (
+	github.com/TheGrimmChester/open-auth-go v0.0.0
+	github.com/TheGrimmChester/open-job-go v0.0.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
+)
+
+replace github.com/TheGrimmChester/open-auth-go => ../Open-Auth-Go
+
+replace github.com/TheGrimmChester/open-job-go => ../Open-Job-Go
