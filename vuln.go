@@ -281,6 +281,7 @@ func rankReachability(org, proj, service string, adv advisory) (status, pathHash
 	for _, sym := range adv.Symbols {
 		conds = append(conds, fmt.Sprintf("positionCaseInsensitive(call_site, '%s') > 0", escapeSQL(sym)))
 	}
+	// callgraph_agg is hub/agent telemetry in the opa DB — never rewrite to osa.
 	sql := fmt.Sprintf(`
 		SELECT path_hash, sum(samples) AS hits
 		FROM opa.callgraph_agg
@@ -289,7 +290,7 @@ func rankReachability(org, proj, service string, adv advisory) (status, pathHash
 		GROUP BY path_hash
 		ORDER BY hits DESC
 		LIMIT 1`, scope, strings.Join(conds, " OR "))
-	rows, err := queryClient.Query(sql)
+	rows, err := queryClient.QueryExact(sql)
 	if err != nil || len(rows) == 0 {
 		return
 	}
