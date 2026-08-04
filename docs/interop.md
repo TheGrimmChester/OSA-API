@@ -43,6 +43,26 @@ User JWTs and standalone `/api/auth/*` come from **Open-Auth-Go** (`Gate`); this
 | **Standalone** | `osa-api` issues JWTs locally. Lab admin: `admin`/`admin`. |
 | **Co-deployed** | Share `JWT_SECRET` with **OPA-Hub**; hub issues; `osa-api` validates. |
 
+## Tenant headers
+
+When `OPA_AUTH_REQUIRED=1`, send **`X-Organization-ID`** and **`X-Project-ID`** on every ClickHouse-backed list (security runs, secrets/SAST/IaC inventory, vulns, IAST). Missing headers yield **HTTP 200 with an empty list**, not an auth error.
+
+```bash
+TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | jq -r .token)
+
+curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
+  -H "Authorization: Bearer $TOKEN" | jq '.runs | length'   # → 0
+
+curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Organization-ID: default-org" \
+  -H "X-Project-ID: default-project" | jq '.runs | length'   # → >0 when CH has rows
+```
+
+From the LAN use `192.168.100.101` instead of `127.0.0.1`. See [api.md](api.md) and [OPA-Stack interop](https://github.com/TheGrimmChester/OPA-Stack/blob/main/docs/interop.md#tenant-headers-required-when-auth-is-on).
+
 ## Service JWT
 
 Mint with `Open-Auth-Go` / `Open-Client-Go` peer helpers: claims `iss` (caller), `aud` (callee), `sub=service`, `scope`, short `exp`, optional `org_id`.
