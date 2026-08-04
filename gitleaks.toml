@@ -31,3 +31,15 @@ paths = [
   '''(?i)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|go\.sum)$''',
   '''(?i)/(dist|build|coverage|\.next|node_modules|vendor)/''',
 ]
+
+# Documentation / *.env.example placeholder handling is deliberately NOT a
+# gitleaks allowlist. A `paths` allowlist here applies unconditionally: adding
+# docs globs would silence a real credential pasted into a documentation page,
+# even alongside `condition = "AND"` and value regexes (verified against
+# gitleaks 8.30 — a regex that matches nothing still leaves the path allowlisted).
+#
+# The rule needs a conjunction — documentation path AND visibly placeholder
+# value — so it lives in the finding ingest path instead, where both facts are
+# available: see docExampleSecretPath / placeholderSecretValue in
+# secret_placeholders.go. That single implementation also covers the embedded
+# lite scanner, so both detectors agree.
