@@ -36,6 +36,8 @@ Dashboard calls only `osa-api`. Peer calls are server-side.
 
 ## User auth modes
 
+User JWTs and standalone `/api/auth/*` come from **Open-Auth-Go** (`Gate`); this repo keeps thin wiring in `auth_wire.go`.
+
 | Mode | Behavior |
 |------|----------|
 | **Standalone** | `osa-api` issues JWTs locally. Lab admin: `admin`/`admin`. |
