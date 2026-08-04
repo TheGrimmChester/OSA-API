@@ -37,6 +37,7 @@ func main() {
 	queryClient = NewClickHouseQuery(chURL)
 	ensureClickHouseDatabase(queryClient)
 	ensureSecuritySchema(queryClient)
+	backfillLegacySecurityTablesOnBoot()
 	initAuthMode()
 
 	authRequired := authRequiredEnv()
