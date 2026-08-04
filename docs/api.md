@@ -43,6 +43,28 @@ Create body (GitHub primary):
 | GET | `/api/security/runs/{id}` | Run detail |
 | GET | `/api/security/runs/{id}/findings` | Findings for a run |
 
+### `GET /api/security/runs` — list query params
+
+| Param | Default | Range | Notes |
+|-------|---------|-------|-------|
+| `limit` | `50` | `1`–`200` | Values above `200` are **silently clamped** to `200`. There is no `offset` or cursor; the handler returns the most recent rows by `started_at DESC` for the active tenant only. |
+
+Response shape: `{"runs":[…],"workspace":"…"}`. No `total`, `has_more`, or `limit_applied` metadata — clients cannot page past the cap without a future API change.
+
+Tenant headers (`X-Organization-Id`, `X-Project-Id`) are required in co-deployed mode; without them the list is empty even when ClickHouse has rows for other orgs/projects.
+
+**NAS example** (hub JWT + tenant headers; `default-org/default-project` had 260 rows, `limit=500` still returns 200):
+
+```bash
+TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | jq -r .token)
+curl -sf "http://127.0.0.1:8093/api/security/runs?limit=500" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Organization-Id: default-org" \
+  -H "X-Project-Id: default-project" | jq '.runs | length'   # → 200
+```
+
 ## AppSec inventory + ingest
 
 | Method | Path |
