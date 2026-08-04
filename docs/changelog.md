@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Docs: tenant headers required for list endpoints when auth is on (empty `runs`/`findings` without them); NAS curl contrast in api/interop.
+- Bump `open-tenant-go` to v0.2.2 so auth-enforced list scope matches `WriteTenant` (`default-org` / `default-project` when headers are omitted or `"all"`).
+- Docs: tenant list scope defaults (no longer empty without headers); NAS curl contrast in api/interop.
 - Bootstrap OSA ClickHouse product tables (`security_runs`, findings, vulns, IAST, dependencies) in `CLICKHOUSE_DB` at startup so co-deployed `opa.*` → `osa.*` rewrite no longer hits an empty database.
 - Auth via Open-Auth-Go `Gate` (delete local `auth.go` / `auth_local.go` duplicates).
 - Hub-linked GitHub security targets: discover orgs via `PEER_OPA_URL`, connectors/repos via `PEER_ORA_URL`, ephemeral `owner/repo` clones for scans.
