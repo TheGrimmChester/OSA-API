@@ -17,10 +17,12 @@ import (
 
 func registerSecurityRunsMux(mux *http.ServeMux, authView, authAdmin func(string, http.HandlerFunc)) {
 	authView("/api/security/profiles", handleSecurityProfiles)
-	authView("/api/security/runs", handleSecurityRuns)
+	// ora-api creates runs with a service JWT (scope "runs:write findings:read"),
+	// so these two accept a user JWT or that service JWT — not user-only.
 	// Trailing-slash subroutes must use the same auth gate as the collection —
 	// plain HandleFunc would leave GET /api/security/runs/{id} open.
-	authView("/api/security/runs/", handleSecurityRunSub)
+	registerPeerAuth(mux, "/api/security/runs", "findings:read", "runs:write", handleSecurityRuns)
+	registerPeerAuth(mux, "/api/security/runs/", "findings:read", "runs:write", handleSecurityRunSub)
 	_ = authAdmin
 }
 

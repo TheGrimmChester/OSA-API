@@ -11,8 +11,10 @@ import (
 // Distinct from ORA review check-runs.
 
 func registerGateMux(mux *http.ServeMux, authView, authAdmin func(string, http.HandlerFunc)) {
-	authView("/api/security/gate", handleSecurityGate)
-	_ = mux
+	// ora-api evaluates the gate with a service JWT (scope findings:read).
+	// GET and POST are both reads here, so both require findings:read.
+	registerPeerAuth(mux, "/api/security/gate", "findings:read", "findings:read", handleSecurityGate)
+	_ = authView
 	_ = authAdmin
 }
 
