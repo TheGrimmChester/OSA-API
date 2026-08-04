@@ -283,6 +283,12 @@ func isLikelySecretFalsePositive(rule, file, match, secret string) bool {
 		strings.HasPrefix(base, "mock_") {
 		return true
 	}
+	// Documentation / *.env.example placeholders, for every rule. Requires both a
+	// doc-or-example path and a visibly placeholder value, so a real credential
+	// pasted into docs still fails the gate.
+	if docPlaceholderFalsePositive(file, match, secret) {
+		return true
+	}
 	rule = strings.ToLower(strings.TrimSpace(rule))
 	if rule != "generic-api-key" && !strings.Contains(rule, "generic") {
 		return false

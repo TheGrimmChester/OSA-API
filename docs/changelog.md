@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Secrets: scope detection so documentation and example-configuration placeholders no longer fail the gate. A match is filtered only when the path is documentation or a `*.example`-style template **and** the value is visibly a stand-in (`your-…`, `changeme`, `${VAR}`, `<token>`, `xxxx…`, or a value that only names its field). Real credentials in documentation still fail, and code paths are unchanged. Enforced in the finding ingest path (covering both the full engine and the embedded lite scanner) rather than as a `gitleaks.toml` path allowlist, which would apply unconditionally and hide real secrets committed to documentation.
 - Auth: adopt Open-Auth-Go per-user project ACLs (`project_ids` / `EnforceProjectACL` on Gate middleware). Restricted JWTs get **403** on non-member `X-Project-ID`; role `admin` stays unrestricted. No second membership store — hub-minted claims only.
 - Auth: `GET /api/security/runs/{id}` and findings subroutes require the same viewer JWT as the collection (previously registered without middleware).
 - Bump `open-tenant-go` to v0.2.2 so auth-enforced list scope matches `WriteTenant` (`default-org` / `default-project` when headers are omitted or `"all"`).
