@@ -45,20 +45,26 @@ User JWTs and standalone `/api/auth/*` come from **Open-Auth-Go** (`Gate`); this
 
 ## Tenant headers
 
-When `OPA_AUTH_REQUIRED=1`, send **`X-Organization-ID`** and **`X-Project-ID`** on every ClickHouse-backed list (security runs, secrets/SAST/IaC inventory, vulns, IAST). Missing headers yield **HTTP 200 with an empty list**, not an auth error.
+When `OPA_AUTH_REQUIRED=1`, send **`X-Organization-ID`** and **`X-Project-ID`** on every ClickHouse-backed list (security runs, secrets/SAST/IaC inventory, vulns, IAST). Omitting them (or sending the picker marker `"all"`) scopes to **`default-org` / `default-project`** — the same write tenant used for INSERT — so lists match rows created without headers (Open-Tenant-Go ≥ 0.2.2). Use a concrete org/project (e.g. `nas` / `infra`) to see that tenant's data.
 
 ```bash
 TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' | jq -r .token)
 
+# Default write tenant (no headers, or after "all" is stripped)
 curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
-  -H "Authorization: Bearer $TOKEN" | jq '.runs | length'   # → 0
+  -H "Authorization: Bearer $TOKEN" | jq '.runs | length'
 
 curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-Organization-ID: default-org" \
-  -H "X-Project-ID: default-project" | jq '.runs | length'   # → >0 when CH has rows
+  -H "X-Project-ID: default-project" | jq '.runs | length'
+
+curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Organization-ID: nas" \
+  -H "X-Project-ID: infra" | jq '.runs | length'
 ```
 
 From the LAN use `192.168.100.101` instead of `127.0.0.1`. See [api.md](api.md) and [OPA-Stack interop](https://github.com/TheGrimmChester/OPA-Stack/blob/main/docs/interop.md#tenant-headers-required-when-auth-is-on).
