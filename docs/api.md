@@ -112,3 +112,20 @@ Distinct from ORA **review** check-runs.
 ## Peer probe
 
 `GET /api/peer/health` — validates service JWT (`aud=osa-api`, scope `health:read`) when `OPEN_SERVICE_JWT_SECRET` is set.
+
+## Peer-callable AppSec routes
+
+These accept **either** a user JWT (viewer+) or a service JWT (`aud=osa-api`) minted
+with `OPEN_SERVICE_JWT_SECRET`. `ora-api` calls them to delegate AppSec; every other
+route is user-JWT-only.
+
+| Route | Read scope | Write scope |
+| --- | --- | --- |
+| `/api/security/runs` | `findings:read` | `runs:write` |
+| `/api/security/runs/{id}` | `findings:read` | `runs:write` |
+| `/api/security/gate` | `findings:read` | `findings:read` (POST is a read) |
+
+A service JWT presented to a user-only route fails `ParseUserJWT` and returns
+**401 `invalid token`** — matching secrets on both sides do not help. If `ora-api`
+logs `peer OSA security run failed` / `peer OSA gate failed` with that 401, check
+this wiring before suspecting secret drift.
