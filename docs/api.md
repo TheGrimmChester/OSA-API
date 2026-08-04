@@ -51,9 +51,9 @@ Create body (GitHub primary):
 
 Response shape: `{"runs":[…],"workspace":"…"}`. No `total`, `has_more`, or `limit_applied` metadata — clients cannot page past the cap without a future API change.
 
-Tenant headers **`X-Organization-ID`** / **`X-Project-ID`** are required when `OPA_AUTH_REQUIRED=1` (NAS). Without them the list is **HTTP 200 `{"runs":[]}`** even when ClickHouse has rows for `default-org` / `default-project`. Same empty-list pattern applies to inventory routes such as `GET /api/security/secrets` and `GET /api/security/sast`.
+Tenant headers **`X-Organization-ID`** / **`X-Project-ID`** scope lists when `OPA_AUTH_REQUIRED=1` (NAS). Omitting them (or sending `"all"`) scopes to **`default-org` / `default-project`**, matching writes (Open-Tenant-Go ≥ 0.2.2). Same pattern applies to inventory routes such as `GET /api/security/secrets` and `GET /api/security/sast`.
 
-**NAS example** (hub JWT; omit headers → `0`; with headers → data; `limit=500` still capped at 200):
+**NAS example** (hub JWT; no headers → default-org rows; wrong org → empty; `limit=500` still capped at 200):
 
 ```bash
 TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
@@ -61,12 +61,17 @@ TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
   -d '{"username":"admin","password":"admin"}' | jq -r .token)
 
 curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
-  -H "Authorization: Bearer $TOKEN" | jq '.runs | length'   # → 0
+  -H "Authorization: Bearer $TOKEN" | jq '.runs | length'
 
 curl -sf "http://127.0.0.1:8093/api/security/runs?limit=500" \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-Organization-ID: default-org" \
   -H "X-Project-ID: default-project" | jq '.runs | length'   # → ≤200
+
+curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Organization-ID: no-such-org" \
+  -H "X-Project-ID: no-such-project" | jq '.runs | length'   # → 0
 ```
 
 ## AppSec inventory + ingest
