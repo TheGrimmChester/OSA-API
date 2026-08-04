@@ -18,7 +18,9 @@ import (
 func registerSecurityRunsMux(mux *http.ServeMux, authView, authAdmin func(string, http.HandlerFunc)) {
 	authView("/api/security/profiles", handleSecurityProfiles)
 	authView("/api/security/runs", handleSecurityRuns)
-	mux.HandleFunc("/api/security/runs/", handleSecurityRunSub)
+	// Trailing-slash subroutes must use the same auth gate as the collection —
+	// plain HandleFunc would leave GET /api/security/runs/{id} open.
+	authView("/api/security/runs/", handleSecurityRunSub)
 	_ = authAdmin
 }
 

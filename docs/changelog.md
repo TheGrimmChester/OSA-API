@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auth: `GET /api/security/runs/{id}` and findings subroutes require the same viewer JWT as the collection (previously registered without middleware).
 - Bump `open-tenant-go` to v0.2.2 so auth-enforced list scope matches `WriteTenant` (`default-org` / `default-project` when headers are omitted or `"all"`).
 - Docs: tenant list scope defaults (no longer empty without headers); NAS curl contrast in api/interop.
 - Bootstrap OSA ClickHouse product tables (`security_runs`, findings, vulns, IAST, dependencies) in `CLICKHOUSE_DB` at startup so co-deployed `opa.*` → `osa.*` rewrite no longer hits an empty database.
