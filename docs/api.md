@@ -51,18 +51,22 @@ Create body (GitHub primary):
 
 Response shape: `{"runs":[…],"workspace":"…"}`. No `total`, `has_more`, or `limit_applied` metadata — clients cannot page past the cap without a future API change.
 
-Tenant headers (`X-Organization-Id`, `X-Project-Id`) are required in co-deployed mode; without them the list is empty even when ClickHouse has rows for other orgs/projects.
+Tenant headers **`X-Organization-ID`** / **`X-Project-ID`** are required when `OPA_AUTH_REQUIRED=1` (NAS). Without them the list is **HTTP 200 `{"runs":[]}`** even when ClickHouse has rows for `default-org` / `default-project`. Same empty-list pattern applies to inventory routes such as `GET /api/security/secrets` and `GET /api/security/sast`.
 
-**NAS example** (hub JWT + tenant headers; `default-org/default-project` had 260 rows, `limit=500` still returns 200):
+**NAS example** (hub JWT; omit headers → `0`; with headers → data; `limit=500` still capped at 200):
 
 ```bash
 TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' | jq -r .token)
+
+curl -sf "http://127.0.0.1:8093/api/security/runs?limit=5" \
+  -H "Authorization: Bearer $TOKEN" | jq '.runs | length'   # → 0
+
 curl -sf "http://127.0.0.1:8093/api/security/runs?limit=500" \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Organization-Id: default-org" \
-  -H "X-Project-Id: default-project" | jq '.runs | length'   # → 200
+  -H "X-Organization-ID: default-org" \
+  -H "X-Project-ID: default-project" | jq '.runs | length'   # → ≤200
 ```
 
 ## AppSec inventory + ingest
