@@ -36,6 +36,7 @@ func main() {
 	writer = NewClickHouseWriter(chURL, 100)
 	queryClient = NewClickHouseQuery(chURL)
 	ensureClickHouseDatabase(queryClient)
+	ensureSecuritySchema(queryClient)
 	initAuthMode()
 
 	authRequired := authRequiredEnv()
