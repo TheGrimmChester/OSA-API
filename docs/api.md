@@ -98,6 +98,26 @@ CI ingest uses `OSA_SECURITY_INGEST_TOKEN` via `Authorization: Bearer` or `X-OSA
 
 Distinct from ORA **review** check-runs.
 
+### Documentation placeholders
+
+Secret detection filters values that are visibly stand-ins **and** live in
+documentation or an example configuration file. Both conditions must hold:
+
+| Condition | Matches |
+|-----------|---------|
+| Path | `docs/`, `doc/`, `documentation/`, `examples/`, `samples/` at any depth; `*.md`, `*.mdx`, `*.rst`, `*.adoc`, `*.txt`; `*.example`, `*.sample`, `*.template`, `*.dist`, `*.tpl` |
+| Value | `your-…`, `changeme`, `replace-me`, `placeholder`, `example`, `dummy`, `redacted`; `${VAR}`, `{{ var }}`, `<token>`, `__VALUE__`; a value that only names its field (`PASS=password`); four or more repeats of one character (`xxxxxxxx`) |
+
+So `OPA_SMTP_PASS=your-smtp-password` in a documentation page does not fail the
+gate, while a real credential pasted into the same page still does, and nothing
+is relaxed for source files. Filtered matches are counted in the run summary as
+`secrets_filtered_fp` rather than dropped silently.
+
+The rule is enforced once, in the finding ingest path, so the full engine and the
+embedded lite scanner agree. It is deliberately **not** a `gitleaks.toml` path
+allowlist: those apply unconditionally, so a `docs/` glob would also silence a
+real credential committed to a documentation page.
+
 ## Vulns / IAST
 
 | Method | Path |
