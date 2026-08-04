@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auth via Open-Auth-Go `Gate` (delete local `auth.go` / `auth_local.go` duplicates).
 - Hub-linked GitHub security targets: discover orgs via `PEER_OPA_URL`, connectors/repos via `PEER_ORA_URL`, ephemeral `owner/repo` clones for scans.
 
 ## Unreleased
