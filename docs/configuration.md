@@ -8,7 +8,7 @@
 | `AUTH_ADMIN_USER` / `AUTH_ADMIN_PASSWORD` | `admin` / `admin` | Lab admin seed for standalone login |
 | `OPEN_SERVICE_JWT_SECRET` | `` | Service JWT mint/validate secret (required for ORA clone credentials) |
 | `CLICKHOUSE_URL` | `http://clickhouse:8123` | ClickHouse HTTP endpoint |
-| `CLICKHOUSE_DB` | `osa` | Product database. Alias: `CLICKHOUSE_DATABASE` |
+| `CLICKHOUSE_DB` | `osa` | Product database. Alias: `CLICKHOUSE_DATABASE`. Startup creates this DB and OSA security tables (`security_runs`, `*_findings`, `service_dependencies`) if missing. |
 | `PEER_OPA_URL` | `` | OPA hub URL — org/tenancy discovery |
 | `PEER_ORA_URL` | `` | ORA API URL — GitHub connectors and clone credentials |
 | `OSA_SECURITY_WORKSPACE` | `/workspace` | **Fallback** scan root for CI/path scans without `connector_id`/`repo_full_name` |
