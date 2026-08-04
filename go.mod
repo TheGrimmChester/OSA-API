@@ -6,8 +6,9 @@ require (
 	github.com/TheGrimmChester/open-auth-go v0.0.0
 	github.com/TheGrimmChester/open-client-go v0.0.0
 	github.com/TheGrimmChester/open-job-go v0.0.0
-	github.com/golang-jwt/jwt/v5 v5.3.1
 )
+
+require github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 
 replace github.com/TheGrimmChester/open-auth-go => ../Open-Auth-Go
 
