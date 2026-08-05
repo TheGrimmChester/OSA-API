@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,13 +24,13 @@ func registerVulnMux(mux *http.ServeMux, authView, authAdmin func(string, http.H
 // --- Advisory catalog (embedded subset; optional OSV enrichment later) ---
 
 type advisory struct {
-	ID          string
-	Package     string
-	Ecosystem   string
-	Severity    string
-	Summary     string
-	Vulnerable  string // semver constraint hint, e.g. "<1.2.3"
-	Symbols     []string
+	ID         string
+	Package    string
+	Ecosystem  string
+	Severity   string
+	Summary    string
+	Vulnerable string // semver constraint hint, e.g. "<1.2.3"
+	Symbols    []string
 }
 
 var embeddedAdvisories = []advisory{
@@ -262,7 +263,13 @@ func parseSemverParts(v string) [3]int {
 // Honesty: absence → "not_observed", never "not_vulnerable".
 func rankReachability(org, proj, service string, adv advisory) (status, pathHash string, hits int64) {
 	status = "not_observed"
-	if queryClient == nil || len(adv.Symbols) == 0 {
+	// A package name alone is enough to run this query — the condition list below
+	// has always included one for it, independent of symbols. The old guard
+	// (`len(adv.Symbols) == 0`) returned before ever using it, so every
+	// package-only advisory reported "not_observed" without a query being issued.
+	// That is indistinguishable from "we looked and found nothing", which is the
+	// one thing this function's honesty rule exists to avoid.
+	if queryClient == nil || (strings.TrimSpace(adv.Package) == "" && len(adv.Symbols) == 0) {
 		return
 	}
 	scope := ""
@@ -276,10 +283,24 @@ func rankReachability(org, proj, service string, adv advisory) (status, pathHash
 		scope += fmt.Sprintf(" AND service = '%s'", escapeSQL(service))
 	}
 	// Prefer matching package name / symbols against call_site (file paths often include package).
+	//
+	// Every term must be non-empty. ClickHouse's position() returns 1 for an empty
+	// needle, so `positionCaseInsensitive(call_site, '') > 0` is TRUE for every
+	// row — one blank package or symbol would turn this OR into "match the whole
+	// call graph" and report a false `observed`, which is strictly worse than the
+	// missing query above: it manufactures evidence rather than omitting it.
 	conds := make([]string, 0, len(adv.Symbols)+1)
-	conds = append(conds, fmt.Sprintf("positionCaseInsensitive(call_site, '%s') > 0", escapeSQL(adv.Package)))
+	if pkg := strings.TrimSpace(adv.Package); pkg != "" {
+		conds = append(conds, fmt.Sprintf("positionCaseInsensitive(call_site, '%s') > 0", escapeSQL(pkg)))
+	}
 	for _, sym := range adv.Symbols {
+		if sym = strings.TrimSpace(sym); sym == "" {
+			continue
+		}
 		conds = append(conds, fmt.Sprintf("positionCaseInsensitive(call_site, '%s') > 0", escapeSQL(sym)))
+	}
+	if len(conds) == 0 {
+		return
 	}
 	// callgraph_agg is hub/agent telemetry in the opa DB — never rewrite to osa.
 	sql := fmt.Sprintf(`
@@ -469,4 +490,100 @@ func maybeRecordIASTFromRaw(raw json.RawMessage) {
 		return
 	}
 	recordIASTFinding(m)
+}
+
+// reachabilityHit is one package's observed-call-graph result.
+type reachabilityHit struct {
+	Status   string
+	PathHash string
+	Hits     int64
+}
+
+// rankReachabilityBatch resolves reachability for many packages in ONE query.
+//
+// The per-advisory function issues a query each time it is called. A CVE scan of a
+// monorepo produces thousands of findings across hundreds of distinct packages, and
+// several advisories routinely share a package — so the per-finding path re-asks
+// the same question dozens of times. This asks once per *distinct* package and lets
+// the caller memoize the map for the whole scan.
+//
+// It keeps the same honesty rule: a package absent from the result is
+// "not_observed", never "not_vulnerable". Absence of evidence is recorded as
+// absence of evidence.
+func rankReachabilityBatch(org, proj, service string, packages []string) map[string]reachabilityHit {
+	out := map[string]reachabilityHit{}
+	if queryClient == nil {
+		return out
+	}
+	// Dedup and drop blanks. A blank needle would match every call site — see the
+	// note in rankReachability — so it must never reach the query.
+	seen := map[string]bool{}
+	var want []string
+	for _, p := range packages {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		want = append(want, p)
+		out[p] = reachabilityHit{Status: "not_observed"}
+	}
+	if len(want) == 0 {
+		return out
+	}
+
+	scope := ""
+	if org != "" {
+		scope += fmt.Sprintf(" AND organization_id = '%s'", escapeSQL(org))
+	}
+	if proj != "" {
+		scope += fmt.Sprintf(" AND project_id = '%s'", escapeSQL(proj))
+	}
+	if service != "" {
+		scope += fmt.Sprintf(" AND service = '%s'", escapeSQL(service))
+	}
+
+	// multiSearchAnyCaseInsensitive returns the 1-based index of the FIRST needle
+	// found, so one pass over the call graph attributes each row to a package
+	// rather than needing one query per needle.
+	needles := make([]string, 0, len(want))
+	for _, p := range want {
+		needles = append(needles, "'"+escapeSQL(p)+"'")
+	}
+	// callgraph_agg is hub/agent telemetry in the opa DB — never rewrite to osa.
+	sql := fmt.Sprintf(`
+		SELECT idx, path_hash, hits FROM (
+			SELECT
+				multiSearchAnyCaseInsensitive(call_site, [%s]) AS idx,
+				path_hash,
+				sum(samples) AS hits,
+				row_number() OVER (PARTITION BY idx ORDER BY sum(samples) DESC) AS rn
+			FROM opa.callgraph_agg
+			WHERE bucket >= now() - INTERVAL 7 DAY%s
+			GROUP BY idx, path_hash
+		)
+		WHERE idx > 0 AND rn = 1`, strings.Join(needles, ", "), scope)
+
+	rows, err := queryClient.QueryExact(sql)
+	if err != nil {
+		// A failed batch leaves every package "not_observed" rather than falling
+		// back to N single queries: that fallback is what this function exists to
+		// avoid, and a scan that quietly issues thousands of queries because one
+		// batch failed is worse than a scan with no reachability data.
+		log.Printf("[WARN] reachability batch (%d package(s)): %v", len(want), err)
+		return out
+	}
+	for _, row := range rows {
+		idx := int(getFloat64(row, "idx"))
+		if idx < 1 || idx > len(want) {
+			continue
+		}
+		hits := int64(getFloat64(row, "hits"))
+		hit := reachabilityHit{Status: "not_observed", PathHash: getString(row, "path_hash"), Hits: hits}
+		if hits > 0 {
+			hit.Status = "observed"
+		}
+		out[want[idx-1]] = hit
+	}
+	return out
 }
