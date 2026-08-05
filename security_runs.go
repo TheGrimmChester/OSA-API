@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 func registerSecurityRunsMux(mux *http.ServeMux, authView, authAdmin func(string, http.HandlerFunc)) {
 	authView("/api/security/profiles", handleSecurityProfiles)
+	authView("/api/services", handleServices)
 	// ora-api creates runs with a service JWT (scope "runs:write findings:read"),
 	// so these two accept a user JWT or that service JWT — not user-only.
 	// Trailing-slash subroutes must use the same auth gate as the collection —
@@ -78,6 +80,105 @@ func handleSecurityProfiles(w http.ResponseWriter, r *http.Request) {
 		},
 		"honesty": "Primary targets are GitHub owner/repo via hub tenancy + ORA connectors (ephemeral clones). Local OSA_SECURITY_WORKSPACE is a CI/fallback mount only. Secrets use gitleaks when installed; otherwise embedded lite. SAST/IaC/container remain lite/stub. IAST is runtime-only.",
 	})
+}
+
+// serviceSourceTables are the tables that carry a `service` label, paired with the
+// timestamp to report as last_seen. Findings can be ingested straight from CI
+// without a security run (the /v1/security/* endpoints take a service name and no
+// run id), so runs alone would miss services the dashboard has findings for.
+var serviceSourceTables = []struct {
+	table   string
+	tsField string
+	isRun   bool
+}{
+	{"security_runs", "started_at", true},
+	{"secret_findings", "scraped_at", false},
+	{"sast_findings", "scraped_at", false},
+	{"iac_findings", "scraped_at", false},
+	{"vuln_findings", "scraped_at", false},
+	{"cve_findings", "scraped_at", false},
+	{"iast_findings", "scraped_at", false},
+}
+
+// handleServices lists the service names this tenant's security corpus is filed
+// under. The scan form's Service field reads it: before this existed the route
+// 404'd and the dropdown offered only its two hardcoded smoke names.
+//
+// Each table is queried separately and individual failures are skipped rather
+// than failing the request — one absent table (a database that predates a
+// findings type, or a legacy install mid-backfill) must not blank the whole list.
+func handleServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if queryClient == nil {
+		writeJSON(w, map[string]interface{}{"services": []interface{}{}})
+		return
+	}
+	scope := tenantScopeSQL(r, queryClient, "")
+	type agg struct {
+		runs     int64
+		findings int64
+		lastSeen string
+	}
+	byName := map[string]*agg{}
+	var degraded []string
+	for _, src := range serviceSourceTables {
+		rows, err := queryClient.Query(fmt.Sprintf(`
+			SELECT service, count() AS n, max(%s) AS last_seen
+			FROM opa.%s WHERE service != ''%s
+			GROUP BY service ORDER BY service LIMIT 500`, src.tsField, src.table, scope))
+		if err != nil {
+			degraded = append(degraded, src.table)
+			continue
+		}
+		for _, row := range rows {
+			name := strings.TrimSpace(getString(row, "service"))
+			if name == "" {
+				continue
+			}
+			a := byName[name]
+			if a == nil {
+				a = &agg{}
+				byName[name] = a
+			}
+			n := int64(atoiDefault(getString(row, "n"), 0))
+			if src.isRun {
+				a.runs += n
+			} else {
+				a.findings += n
+			}
+			// String compare is correct here: ClickHouse renders DateTime64 as
+			// zero-padded "YYYY-MM-DD hh:mm:ss.sss", which sorts lexically.
+			if ls := getString(row, "last_seen"); ls > a.lastSeen {
+				a.lastSeen = ls
+			}
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	services := make([]map[string]interface{}, 0, len(names))
+	for _, name := range names {
+		a := byName[name]
+		services = append(services, map[string]interface{}{
+			"name":      name,
+			"runs":      a.runs,
+			"findings":  a.findings,
+			"last_seen": a.lastSeen,
+		})
+	}
+	out := map[string]interface{}{"services": services}
+	if len(degraded) > 0 {
+		// Surfaced rather than swallowed: a short list because a table is missing
+		// looks identical to a genuinely short list.
+		out["unavailable_tables"] = degraded
+		out["note"] = "Some finding tables could not be read; the list may be incomplete."
+	}
+	writeJSON(w, out)
 }
 
 func handleSecurityRuns(w http.ResponseWriter, r *http.Request) {

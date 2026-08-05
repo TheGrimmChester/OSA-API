@@ -17,6 +17,7 @@ Smoke listen address: `:8093`. Health `service` id: `osa-api`.
 | GET | `/api/github/connectors` | Proxy ORA connectors (`PEER_ORA_URL`) |
 | GET | `/api/github/connectors/{id}/repos` | Proxy ORA repo list |
 | GET | `/api/security/targets` | Discovery model summary for the dashboard |
+| GET | `/api/services` | Service names this tenant's security corpus is filed under |
 
 These two routes back the dashboard's tenant picker. OSA owns neither directory:
 organizations come from the hub (which fronts OAM for peers via its `oamdir`
@@ -38,6 +39,22 @@ it through would return zero projects on the selection meant to widen the list.
 
 With `PEER_OAM_URL` unset, `/api/oam/projects` returns an empty list plus
 `peer_unavailable: true` — the picker is empty, not broken.
+
+### `GET /api/services`
+
+Backs the Service field on the scan form. Tenant-scoped, aggregated across
+`security_runs` and every findings table that carries a `service` label — CI can
+ingest findings via `/v1/security/*` with a service name and no run id, so runs
+alone would miss services that have findings:
+
+```json
+{"services":[{"name":"php-smoke","runs":1,"findings":3,"last_seen":"2026-08-05 12:41:07.881"}]}
+```
+
+Each source table is queried independently and a table that cannot be read is
+skipped, not fatal. When that happens the response also carries
+`unavailable_tables` and a `note`, because a short list from a missing table is
+otherwise indistinguishable from a genuinely short list.
 
 ## Security runs
 
