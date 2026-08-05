@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 // Credentials stay in ORA; hub provides identity/org directory only.
 func registerHubGitHubMux(mux *http.ServeMux, authView func(string, http.HandlerFunc)) {
 	authView("/api/hub/organizations", handleHubOrganizations)
+	authView("/api/oam/projects", handleOAMProjects)
 	authView("/api/hub/github/status", handleHubGitHubStatus)
 	authView("/api/github/connectors", handleGitHubConnectorsProxy)
 	mux.HandleFunc("/api/github/connectors/", func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +41,10 @@ func peerOPAURL() string {
 
 func peerORAURL() string {
 	return strings.TrimRight(strings.TrimSpace(os.Getenv("PEER_ORA_URL")), "/")
+}
+
+func peerOAMURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("PEER_OAM_URL")), "/")
 }
 
 func handleHubOrganizations(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +73,97 @@ func handleHubOrganizations(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	_, _ = w.Write(aliasDirectoryIDs(raw, "organizations", "org_id"))
+}
+
+// handleOAMProjects proxies the OAM project directory for the dashboard's tenant
+// picker.
+//
+// Organizations come from the hub because the hub owns that directory for peers
+// (see OPA-Hub internal/oamdir), but neither the hub nor OSA serves a projects
+// route, so this one reads OAM directly — the same PEER_OAM_URL the hub and OPM
+// already use. Unset, the picker stays empty instead of failing, mirroring
+// handleHubOrganizations.
+func handleOAMProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	base := peerOAMURL()
+	if base == "" {
+		writeJSON(w, map[string]interface{}{
+			"projects":         []interface{}{},
+			"peer_unavailable": true,
+			"peer":             "oam-api",
+			"note":             "Set PEER_OAM_URL to discover projects.",
+		})
+		return
+	}
+	target := base + "/api/projects"
+	// "all" is the tenant-header sentinel for unscoped, not an org id. OAM's
+	// organization_id filter is a concrete-id predicate, so forwarding the
+	// sentinel would emit `organization_id = 'all'` and empty the picker on the
+	// very selection that is meant to widen it. Omitting it lets OAM scope by
+	// actor instead.
+	if org := strings.TrimSpace(r.URL.Query().Get("organization_id")); org != "" && !strings.EqualFold(org, "all") {
+		target += "?organization_id=" + url.QueryEscape(org)
+	}
+	raw, status, err := proxyPeerGET(r.Context(), target, r)
+	if err != nil {
+		writeJSON(w, map[string]interface{}{
+			"projects": []interface{}{},
+			"error":    err.Error(),
+			"peer":     "oam-api",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(aliasDirectoryIDs(raw, "projects", "project_id"))
+}
+
+// aliasDirectoryIDs adds the dashboard's field name to each row of a proxied
+// directory payload.
+//
+// OAM and the hub both key directory rows as "id"; the OSA dashboard's tenant
+// picker reads "org_id"/"project_id" (shell/Shell.jsx, pages/Account.jsx). Doing
+// this here keeps family-shape knowledge out of the dashboard, and *adding* the
+// alias rather than renaming leaves the documented "id" field intact — OPM's
+// dashboard reads `id` off its own /api/hub/organizations.
+//
+// A body that does not parse as the expected shape is returned untouched: peer
+// error bodies are not always JSON, and rewriting one would hide the real
+// failure behind a decode error.
+func aliasDirectoryIDs(raw []byte, listKey, aliasKey string) []byte {
+	var payload map[string]interface{}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	// Numbers stay json.Number so a re-encode cannot reformat one (a float64
+	// round-trip would turn a large id or timestamp into scientific notation).
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return raw
+	}
+	list, ok := payload[listKey].([]interface{})
+	if !ok {
+		return raw
+	}
+	for _, item := range list {
+		row, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, exists := row[aliasKey]; exists {
+			continue
+		}
+		if id, ok := row["id"].(string); ok && id != "" {
+			row[aliasKey] = id
+		}
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 func handleHubGitHubStatus(w http.ResponseWriter, r *http.Request) {
@@ -110,8 +206,10 @@ func handleSecurityTargets(w http.ResponseWriter, r *http.Request) {
 		"credentials_home":    "ora",
 		"peer_opa_configured": peerOPAURL() != "",
 		"peer_ora_configured": peerORAURL() != "",
+		"peer_oam_configured": peerOAMURL() != "",
 		"endpoints": map[string]string{
 			"organizations": "/api/hub/organizations",
+			"projects":      "/api/oam/projects",
 			"github_status": "/api/hub/github/status",
 			"connectors":    "/api/github/connectors",
 			"repos":         "/api/github/connectors/{id}/repos",
@@ -211,7 +309,14 @@ func proxyPeerGET(ctx context.Context, url string, r *http.Request) ([]byte, int
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	// Drain before closing so the connection can be reused: the LimitReader stops
+	// at 8 MiB and a read error stops sooner, and closing a body with bytes still
+	// pending makes net/http discard the connection instead of returning it to the
+	// keep-alive pool. Same pattern as the ClickHouse writer.
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, resp.StatusCode, err

@@ -7,15 +7,37 @@ Smoke listen address: `:8093`. Health `service` id: `osa-api`.
 `GET /api/health` → `{"status":"ok","service":"osa-api"}`
 
 
-## Hub + GitHub discovery
+## Tenant directory + GitHub discovery
 
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/hub/organizations` | Proxy hub tenancy orgs (`PEER_OPA_URL`) |
+| GET | `/api/oam/projects` | Proxy OAM projects (`PEER_OAM_URL`); `?organization_id=` filters |
 | GET | `/api/hub/github/status` | Hub GitHub status + OSA peer config |
 | GET | `/api/github/connectors` | Proxy ORA connectors (`PEER_ORA_URL`) |
 | GET | `/api/github/connectors/{id}/repos` | Proxy ORA repo list |
 | GET | `/api/security/targets` | Discovery model summary for the dashboard |
+
+These two routes back the dashboard's tenant picker. OSA owns neither directory:
+organizations come from the hub (which fronts OAM for peers via its `oamdir`
+package), and projects come straight from OAM because no peer-facing projects
+route exists upstream.
+
+Both upstreams key rows as `id`. Each row is returned with the dashboard's field
+name **added** alongside it — `org_id` on organizations, `project_id` on projects —
+so `id` stays valid for existing callers:
+
+```json
+{"organizations":[{"id":"acme","org_id":"acme","agent_count":0,"source":"oam"}]}
+{"projects":[{"id":"web","project_id":"web","organization_id":"acme","name":"Web"}]}
+```
+
+`organization_id=all` is dropped rather than forwarded: `all` is the tenant-header
+sentinel for "unscoped", while OAM's filter is a concrete-id predicate, so passing
+it through would return zero projects on the selection meant to widen the list.
+
+With `PEER_OAM_URL` unset, `/api/oam/projects` returns an empty list plus
+`peer_unavailable: true` — the picker is empty, not broken.
 
 ## Security runs
 
