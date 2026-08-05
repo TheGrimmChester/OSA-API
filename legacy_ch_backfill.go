@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 )
 
@@ -103,7 +104,15 @@ func chTableRowCount(db, table string) (uint64, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	switch v := rows[0]["c"].(type) {
+	return countFromRow(rows[0])
+}
+
+// countFromRow extracts a count() value from a ClickHouse JSON row.
+//
+// Split out from chTableRowCount so the type handling is testable: it was wrong for
+// the only shape that occurs in production, and no test could reach it.
+func countFromRow(row map[string]interface{}) (uint64, error) {
+	switch v := row["c"].(type) {
 	case float64:
 		return uint64(v), nil
 	case uint64:
@@ -113,8 +122,25 @@ func chTableRowCount(db, table string) (uint64, error) {
 			return 0, nil
 		}
 		return uint64(v), nil
+	case string:
+		// ClickHouse serialises UInt64 as a QUOTED STRING in JSON — {"c":"2"} —
+		// to avoid the precision loss of a JavaScript number. count() is UInt64,
+		// so this is the ONLY case that ever runs in production.
+		//
+		// Without it every count fell through to `default: return 0`, which made
+		// backfillLegacySecurityTableOnBoot bail at `hubN == 0` for every table on
+		// every boot. The legacy backfill has therefore never copied a row — the
+		// [WARN] path its callers guard against was never even reached.
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("unparseable count %q: %w", v, err)
+		}
+		return n, nil
 	default:
-		return 0, nil
+		// An unrecognised type must be an error, not a silent zero. A zero here is
+		// indistinguishable from an empty table and disables the backfill without
+		// saying so — which is exactly how the string case went unnoticed.
+		return 0, fmt.Errorf("unexpected count type %T", v)
 	}
 }
 
