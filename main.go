@@ -77,6 +77,7 @@ func main() {
 	registerLocalAuthMux(mux)
 
 	registerSecurityRunsMux(mux, authView, authAdmin)
+	registerSecurityReposMux(mux, authView)
 	registerHubGitHubMux(mux, authView)
 	registerAppSecMux(mux, authView, authAdmin)
 	registerAppSecDeepMux(mux, authView, authAdmin)
@@ -84,6 +85,7 @@ func main() {
 	registerGateMux(mux, authView, authAdmin)
 	registerPeerSCMEventsMux(mux)
 	registerServiceAuthProbe(mux)
+	authView("/api/security/cve/status", handleCVECacheStatus)
 
 	srv := &http.Server{
 		Addr:              addr,

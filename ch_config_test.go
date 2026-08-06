@@ -25,6 +25,7 @@ func TestSchemaCreatesEveryProductTable(t *testing.T) {
 	for _, table := range []string{
 		"security_runs", "secret_findings", "sast_findings", "iac_findings",
 		"vuln_findings", "iast_findings", "service_dependencies", "cve_findings",
+		"repo_security_scores",
 	} {
 		want := "CREATE TABLE IF NOT EXISTS " + db + "." + table + " ("
 		if !strings.Contains(joined, want) {

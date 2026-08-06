@@ -228,6 +228,21 @@ func securitySchemaStatements(db string) []string {
 		) ENGINE = ReplacingMergeTree(scraped_at)
 		ORDER BY (organization_id, project_id, service, release, ecosystem, package_name, version)
 		TTL toDateTime(scraped_at) + toIntervalDay(90)`,
+
+		// Per-repo composite security score: mean of per-scanner facets.
+		// ReplacingMergeTree so a partial re-scan can merge without wiping history —
+		// the application merges facets before insert; this table stores the merged row.
+		`CREATE TABLE IF NOT EXISTS ` + db + `.repo_security_scores (
+			organization_id String DEFAULT '',
+			project_id String DEFAULT '',
+			repo_full_name String,
+			score Float64 DEFAULT -1,
+			scanners_json String DEFAULT '{}',
+			problem_count Int32 DEFAULT 0,
+			updated_at DateTime64(3) DEFAULT now64(3),
+			last_run_id String DEFAULT ''
+		) ENGINE = ReplacingMergeTree(updated_at)
+		ORDER BY (organization_id, project_id, repo_full_name)`,
 	}
 }
 

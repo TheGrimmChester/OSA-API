@@ -79,8 +79,57 @@ Create body (GitHub primary):
 |--------|------|-------|
 | GET | `/api/security/profiles` | Scanner profiles (`auto`, `php`, `node`, …) |
 | GET/POST | `/api/security/runs` | List / create security runs (`connector_id` + `repo_full_name` preferred) |
+| POST | `/api/security/runs/batch` | Create up to 50 runs for `repos[]` with shared connector/profile/scanners |
 | GET | `/api/security/runs/{id}` | Run detail |
 | GET | `/api/security/runs/{id}/findings` | Findings for a run |
+| GET | `/api/security/repos` | Repository scoreboard (composite score + per-scanner facets) |
+| GET | `/api/security/repos/{owner}/{repo}` | Repo detail: score breakdown, problems, recent runs |
+
+### Repository scores
+
+Composite **repo score** is the arithmetic mean of **per-scanner facets** in
+`{secrets, sast, iac, cve, container}` (`sbom` is inventory-only and excluded).
+
+Each scanner facet:
+
+```
+max(0, 100 - 25*blocker - 20*critical - 10*high - 4*medium - 1*low)
+```
+
+(info ignored). A run that executes only one scanner updates **only that facet**;
+other scanners keep their previous scores and `run_id`s. Unmeasured scanners are
+omitted from the mean (shown as null / "—" in the UI, not as 100).
+
+`GET /api/security/repos?connector_id=` optionally unions ORA discovery with
+stored rollups so unscanned repos appear alongside scored ones.
+
+### `POST /api/security/runs/batch`
+
+```json
+{
+  "connector_id": "conn-…",
+  "repos": ["owner/a", "owner/b"],
+  "ref": "main",
+  "profile": "auto",
+  "scanners": ["secrets", "sast"],
+  "dispatch": true
+}
+```
+
+Response `200` (all ok), `207` (partial), or `400` (none created):
+
+```json
+{
+  "runs": [{"repo_full_name": "owner/a", "id": "srun-…", "status": "queued"}],
+  "errors": [],
+  "total": 2,
+  "ok": 1,
+  "failed": 0
+}
+```
+
+Batch size is capped at **50**.
+
 
 ### `GET /api/security/runs` — list query params
 

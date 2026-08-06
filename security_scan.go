@@ -226,11 +226,66 @@ func walkScanFiles(root string, maxFiles int) []string {
 }
 
 func insertFindingRow(table string, row map[string]interface{}) {
+	rememberFindingSeverity(table, row)
 	if writer == nil {
 		return
 	}
 	payload, _ := json.Marshal(row)
 	writer.insertAsync(table, append(payload, '\n'))
+}
+
+// findingSevByRun accumulates severity bands while scanners insert rows (before CH flush).
+var findingSevByRun sync.Map // runID|scanner -> map[string]int
+
+func rememberFindingSeverity(table string, row map[string]interface{}) {
+	runID, _ := row["security_run_id"].(string)
+	if runID == "" {
+		return
+	}
+	sev, _ := row["severity"].(string)
+	sev = strings.ToLower(strings.TrimSpace(sev))
+	if sev == "" {
+		sev = "medium"
+	}
+	scanner := ""
+	switch table {
+	case "secret_findings":
+		scanner = "secrets"
+	case "sast_findings":
+		scanner = "sast"
+	case "iac_findings":
+		kind, _ := row["kind"].(string)
+		if strings.EqualFold(kind, "container") {
+			scanner = "container"
+		} else {
+			scanner = "iac"
+		}
+	case "cve_findings":
+		scanner = "cve"
+	default:
+		return
+	}
+	key := runID + "|" + scanner
+	v, _ := findingSevByRun.LoadOrStore(key, map[string]int{})
+	m := v.(map[string]int)
+	// map is mutated under LoadOrStore without lock — scans are single-threaded per run.
+	m[sev]++
+}
+
+// severityCountsForScannerRun returns in-memory severity counts for a finished scanner.
+func severityCountsForScannerRun(scanner, runID string) map[string]int {
+	key := runID + "|" + scanner
+	v, ok := findingSevByRun.Load(key)
+	if !ok {
+		return nil
+	}
+	findingSevByRun.Delete(key)
+	src, _ := v.(map[string]int)
+	out := map[string]int{}
+	for k, n := range src {
+		out[k] = n
+	}
+	return out
 }
 
 // gitleaksBin returns the gitleaks CLI path when available (OPA_GITLEAKS_BIN or PATH).

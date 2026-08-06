@@ -25,7 +25,178 @@ func registerSecurityRunsMux(mux *http.ServeMux, authView, authAdmin func(string
 	// plain HandleFunc would leave GET /api/security/runs/{id} open.
 	registerPeerAuth(mux, "/api/security/runs", "findings:read", "runs:write", handleSecurityRuns)
 	registerPeerAuth(mux, "/api/security/runs/", "findings:read", "runs:write", handleSecurityRunSub)
+	registerPeerAuth(mux, "/api/security/runs/batch", "findings:read", "runs:write", handleSecurityRunsBatch)
 	_ = authAdmin
+}
+
+const securityRunsBatchMax = 50
+
+type securityRunsBatchBody struct {
+	ConnectorID string   `json:"connector_id"`
+	Repos       []string `json:"repos"`
+	Ref         string   `json:"ref"`
+	Profile     string   `json:"profile"`
+	Scanners    []string `json:"scanners"`
+	Service     string   `json:"service"`
+	Dispatch    *bool    `json:"dispatch"`
+}
+
+func handleSecurityRunsBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read error", 400)
+		return
+	}
+	var body securityRunsBatchBody
+	if json.Unmarshal(raw, &body) != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+	connectorID := strings.TrimSpace(body.ConnectorID)
+	if connectorID == "" {
+		http.Error(w, "connector_id required", 400)
+		return
+	}
+	repos := []string{}
+	seen := map[string]bool{}
+	for _, name := range body.Repos {
+		name = strings.TrimSpace(name)
+		if name == "" || !strings.Contains(name, "/") || seen[name] {
+			continue
+		}
+		seen[name] = true
+		repos = append(repos, name)
+	}
+	if len(repos) == 0 {
+		http.Error(w, "repos required (owner/repo list)", 400)
+		return
+	}
+	if len(repos) > securityRunsBatchMax {
+		http.Error(w, fmt.Sprintf("batch size %d exceeds max %d", len(repos), securityRunsBatchMax), 400)
+		return
+	}
+
+	created := []map[string]interface{}{}
+	errors := []map[string]interface{}{}
+	for _, repo := range repos {
+		runBody := securityRunCreateBody{
+			Service:      nz(body.Service, "github-scan"),
+			Profile:      nz(body.Profile, "auto"),
+			Scanners:     body.Scanners,
+			Dispatch:     body.Dispatch,
+			RepoFullName: repo,
+			ConnectorID:  connectorID,
+			Ref:          body.Ref,
+		}
+		rec, errMsg, status := createSecurityRun(r, runBody)
+		if errMsg != "" {
+			errors = append(errors, map[string]interface{}{
+				"repo_full_name": repo,
+				"error":          errMsg,
+				"status":         status,
+			})
+			continue
+		}
+		created = append(created, map[string]interface{}{
+			"repo_full_name":  repo,
+			"id":              rec["id"],
+			"security_run_id": rec["id"],
+			"status":          rec["status"],
+		})
+	}
+	code := 200
+	if len(created) == 0 {
+		code = 400
+	} else if len(errors) > 0 {
+		code = 207
+	}
+	w.WriteHeader(code)
+	writeJSON(w, map[string]interface{}{
+		"runs":   created,
+		"errors": errors,
+		"total":  len(repos),
+		"ok":     len(created),
+		"failed": len(errors),
+	})
+}
+
+// createSecurityRun is the shared create path used by POST /runs and /runs/batch.
+// Returns the run row, an error message (empty on success), and an HTTP-ish status hint.
+func createSecurityRun(r *http.Request, body securityRunCreateBody) (map[string]interface{}, string, int) {
+	ctx, _ := ExtractTenantContext(r, queryClient)
+	org, proj := ctx.WriteTenant()
+	if !enforceWriteLocalityHTTP(nil, r, org, proj) {
+		return nil, "write locality denied", 403
+	}
+	repo := strings.TrimSpace(body.RepoFullName)
+	connectorID := strings.TrimSpace(body.ConnectorID)
+	githubTarget := repo != "" && connectorID != ""
+	if repo != "" && connectorID == "" {
+		return nil, "connector_id required with repo_full_name", 400
+	}
+	if connectorID != "" && (repo == "" || !strings.Contains(repo, "/")) {
+		return nil, "repo_full_name must be owner/repo when connector_id is set", 400
+	}
+	service := body.Service
+	if service == "" {
+		if githubTarget {
+			service = "github-scan"
+		} else {
+			service = "workspace-scan"
+		}
+	}
+	profile := nz(body.Profile, "auto")
+	runID := nz(body.SecurityRunID, securityRunID(org, proj, service, time.Now().UTC().Format(time.RFC3339Nano)))
+	scanners := normalizeSecurityScanners(body.Scanners)
+	if len(scanners) == 0 {
+		if profile == "auto" || profile == "" {
+			if !githubTarget {
+				root, rerr := resolveSecurityScanPath(body.TargetPath)
+				if rerr == nil {
+					scanners = detectSecurityScanners(root, body.Image)
+				}
+			}
+			if len(scanners) == 0 {
+				scanners = []string{"secrets", "sast"}
+			}
+		} else {
+			scanners = securityProfileScanners(profile)
+			if len(scanners) == 0 {
+				scanners = []string{"secrets", "sast"}
+			}
+		}
+	}
+	dispatch := true
+	if body.Dispatch != nil {
+		dispatch = *body.Dispatch
+	}
+	scannersJSON, _ := json.Marshal(scanners)
+	now := time.Now().UTC().Format("2006-01-02 15:04:05.000")
+	targetNote := body.TargetPath
+	if githubTarget {
+		targetNote = "ephemeral:" + repo
+	}
+	row := map[string]interface{}{
+		"id": runID, "organization_id": org, "project_id": proj,
+		"service": service, "profile": profile, "scanners_json": string(scannersJSON),
+		"target_path": targetNote, "image": body.Image, "status": "queued",
+		"summary_json": "{}", "error": "", "started_at": now, "finished_at": now,
+		"repo_full_name": repo, "pr_number": body.PRNumber,
+		"commit_sha": body.CommitSHA, "scm_job_id": body.SCMJobID, "ref": body.Ref,
+	}
+	rememberSecurityRun(row)
+	if writer != nil {
+		payload, _ := json.Marshal(row)
+		writer.insertAsync("security_runs", append(payload, '\n'))
+	}
+	if dispatch {
+		go runSecurityScanJob(runID, org, proj, service, profile, scanners, body.TargetPath, body.Image, repo, connectorID, body.Ref, body.PRNumber, body.CommitSHA, body.SCMJobID)
+	}
+	return row, "", 200
 }
 
 func securityRunID(parts ...string) string {
@@ -225,6 +396,10 @@ func handleSecurityRunSub(w http.ResponseWriter, r *http.Request) {
 		handleSecurityRuns(w, r)
 		return
 	}
+	if path == "batch" {
+		handleSecurityRunsBatch(w, r)
+		return
+	}
 	parts := strings.Split(path, "/")
 	id := parts[0]
 	if len(parts) == 1 {
@@ -347,85 +522,33 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", 400)
 		return
 	}
-	ctx, _ := ExtractTenantContext(r, queryClient)
-	org, proj := ctx.WriteTenant()
-	if !enforceWriteLocalityHTTP(w, r, org, proj) {
+	row, errMsg, status := createSecurityRun(r, body)
+	if errMsg != "" {
+		http.Error(w, errMsg, status)
 		return
 	}
-	repo := strings.TrimSpace(body.RepoFullName)
+	runID, _ := row["id"].(string)
+	repo := getString(row, "repo_full_name")
 	connectorID := strings.TrimSpace(body.ConnectorID)
 	githubTarget := repo != "" && connectorID != ""
-	if repo != "" && connectorID == "" {
-		http.Error(w, "connector_id required with repo_full_name", 400)
-		return
-	}
-	if connectorID != "" && (repo == "" || !strings.Contains(repo, "/")) {
-		http.Error(w, "repo_full_name must be owner/repo when connector_id is set", 400)
-		return
-	}
-	service := body.Service
-	if service == "" {
-		if githubTarget {
-			service = "github-scan"
-		} else {
-			service = "workspace-scan"
-		}
-	}
-	profile := nz(body.Profile, "auto")
-	runID := nz(body.SecurityRunID, securityRunID(org, proj, service, time.Now().UTC().Format(time.RFC3339Nano)))
-	scanners := normalizeSecurityScanners(body.Scanners)
-	if len(scanners) == 0 {
-		if profile == "auto" || profile == "" {
-			if !githubTarget {
-				root, rerr := resolveSecurityScanPath(body.TargetPath)
-				if rerr == nil {
-					scanners = detectSecurityScanners(root, body.Image)
-				}
-			}
-			if len(scanners) == 0 {
-				scanners = []string{"secrets", "sast"}
-			}
-		} else {
-			scanners = securityProfileScanners(profile)
-		}
-	}
-	dispatch := true
-	if body.Dispatch != nil {
-		dispatch = *body.Dispatch
-	}
-	scannersJSON, _ := json.Marshal(scanners)
-	now := time.Now().UTC().Format("2006-01-02 15:04:05.000")
-	targetNote := body.TargetPath
-	if githubTarget {
-		targetNote = "ephemeral:" + repo
-	}
-	row := map[string]interface{}{
-		"id": runID, "organization_id": org, "project_id": proj,
-		"service": service, "profile": profile, "scanners_json": string(scannersJSON),
-		"target_path": targetNote, "image": body.Image, "status": "queued",
-		"summary_json": "{}", "error": "", "started_at": now, "finished_at": now,
-		"repo_full_name": repo, "pr_number": body.PRNumber,
-		"commit_sha": body.CommitSHA, "scm_job_id": body.SCMJobID,
-	}
-	rememberSecurityRun(row)
-	if writer != nil {
-		payload, _ := json.Marshal(row)
-		writer.insertAsync("security_runs", append(payload, '\n'))
-	}
+	scanners := parseScannersJSON(getString(row, "scanners_json"))
 	honesty := "Secrets via gitleaks when available, else embedded lite; other scanners remain lite/stub."
 	if githubTarget {
 		honesty += " Target is an ephemeral clone of " + repo + " (ORA clone credentials)."
 	} else {
 		honesty += " Fallback path scan against OSA_SECURITY_WORKSPACE when no connector_id/repo_full_name."
 	}
+	dispatch := true
+	if body.Dispatch != nil {
+		dispatch = *body.Dispatch
+	}
 	out := map[string]interface{}{
 		"ok": true, "id": runID, "security_run_id": runID,
-		"service": service, "profile": profile, "scanners": scanners,
+		"service": getString(row, "service"), "profile": getString(row, "profile"), "scanners": scanners,
 		"repo_full_name": repo, "connector_id": connectorID,
 		"honesty": honesty,
 	}
 	if dispatch {
-		go runSecurityScanJob(runID, org, proj, service, profile, scanners, body.TargetPath, body.Image, repo, connectorID, body.Ref, body.PRNumber, body.CommitSHA, body.SCMJobID)
 		out["dispatch"] = map[string]interface{}{"dispatched": true}
 		out["status"] = "running"
 	} else {
@@ -433,7 +556,6 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 		out["status"] = "queued"
 	}
 	writeJSON(w, out)
-
 }
 
 var (
@@ -536,6 +658,10 @@ func runSecurityScanJob(runID, org, proj, service, profile string, scanners []st
 		if e != nil && firstErr == nil {
 			firstErr = e
 		}
+		// Prefer live accumulator (insertFindingRow); secrets also has takeSecretSeverityCounts.
+		if sev := severityCountsForScannerRun(s, runID); len(sev) > 0 {
+			severityCounts[s] = sev
+		}
 	}
 	honesty := "lite/stub (+ gitleaks for secrets when available)."
 	if githubTarget {
@@ -565,6 +691,10 @@ func runSecurityScanJob(runID, org, proj, service, profile string, scanners []st
 		errMsg = firstErr.Error()
 	}
 	updateSecurityRun(base, status, string(summary), errMsg)
+	if status == "completed" || status == "completed_with_errors" {
+		finishedAt := time.Now().UTC().Format("2006-01-02 15:04:05.000")
+		updateRepoScoreAfterRun(org, proj, repo, runID, string(summary), scanners, finishedAt)
+	}
 }
 
 
