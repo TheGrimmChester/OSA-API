@@ -26,7 +26,7 @@ func connectorStatus(row map[string]interface{}) string {
 }
 
 // connectorActiveUnderOrg reports whether a connector row is usable for orgID:
-// status active (or legacy empty) and organization_id exactly matches.
+// status must be active (empty/pending fail closed) and organization_id exactly matches.
 func connectorActiveUnderOrg(row map[string]interface{}, orgID string) bool {
 	if row == nil {
 		return false
