@@ -29,8 +29,8 @@ flowchart LR
 ```
 
 1. **Hub** (`PEER_OPA_URL`): identity and organization directory (`GET /api/tenancy/organizations`, `GET /api/github/status`).
-2. **ORA** (`PEER_ORA_URL`): GitHub App / PAT connectors; list repos; mint short-lived clone credentials.
-3. **OSA**: proxies discovery for the dashboard; security runs with `connector_id` + `repo_full_name` (`owner/repo`) clone into an ephemeral directory, scan, then delete the clone.
+2. **ORA** (`PEER_ORA_URL`): GitHub App / PAT connectors; list repos; mint short-lived clone credentials. Peer resolve requires active + matching org.
+3. **OSA**: proxies discovery for the dashboard; re-filters connector lists to active/same-org; create/discovery/rescan reject foreign/pending `connector_id` (**403**). Security runs with `connector_id` + `repo_full_name` (`owner/repo`) clone into an ephemeral directory, scan, then delete the clone.
 
 Dashboard calls only `osa-api`. Peer calls are server-side.
 

@@ -33,12 +33,21 @@ func handleSecurityRepos(w http.ResponseWriter, r *http.Request) {
 	connectorID := strings.TrimSpace(r.URL.Query().Get("connector_id"))
 	discovered := []string{}
 	var discoveryErr string
-	if connectorID != "" && peerORAURL() != "" {
-		var err error
-		discovered, err = discoverConnectorRepos(r, connectorID)
-		if err != nil {
-			discoveryErr = err.Error()
-			log.Printf("discover repos: %v", err)
+	if connectorID != "" {
+		if msg, code := verifyConnectorActiveForRequest(r, connectorID); msg != "" {
+			if code == 403 {
+				http.Error(w, msg, 403)
+				return
+			}
+			discoveryErr = msg
+			log.Printf("discover repos: %s", msg)
+		} else if peerORAURL() != "" {
+			var err error
+			discovered, err = discoverConnectorRepos(r, connectorID)
+			if err != nil {
+				discoveryErr = err.Error()
+				log.Printf("discover repos: %v", err)
+			}
 		}
 	}
 

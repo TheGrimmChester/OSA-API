@@ -61,6 +61,10 @@ func handleSecurityRunsBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connector_id required", 400)
 		return
 	}
+	if msg, code := verifyConnectorActiveForRequest(r, connectorID); msg != "" {
+		http.Error(w, msg, code)
+		return
+	}
 	repos := []string{}
 	seen := map[string]bool{}
 	for _, name := range body.Repos {
@@ -92,7 +96,7 @@ func handleSecurityRunsBatch(w http.ResponseWriter, r *http.Request) {
 			ConnectorID:  connectorID,
 			Ref:          body.Ref,
 		}
-		rec, errMsg, status := createSecurityRun(r, runBody)
+		rec, errMsg, status := createSecurityRun(r, runBody, false)
 		if errMsg != "" {
 			errors = append(errors, map[string]interface{}{
 				"repo_full_name": repo,
@@ -126,7 +130,9 @@ func handleSecurityRunsBatch(w http.ResponseWriter, r *http.Request) {
 
 // createSecurityRun is the shared create path used by POST /runs and /runs/batch.
 // Returns the run row, an error message (empty on success), and an HTTP-ish status hint.
-func createSecurityRun(r *http.Request, body securityRunCreateBody) (map[string]interface{}, string, int) {
+// When verifyConnector is true and connector_id is set, the connector must be active
+// under the caller's org (batch verifies once up-front and passes false).
+func createSecurityRun(r *http.Request, body securityRunCreateBody, verifyConnector bool) (map[string]interface{}, string, int) {
 	ctx, _ := ExtractTenantContext(r, queryClient)
 	org, proj := ctx.WriteTenant()
 	if !enforceWriteLocalityHTTP(nil, r, org, proj) {
@@ -140,6 +146,14 @@ func createSecurityRun(r *http.Request, body securityRunCreateBody) (map[string]
 	}
 	if connectorID != "" && (repo == "" || !strings.Contains(repo, "/")) {
 		return nil, "repo_full_name must be owner/repo when connector_id is set", 400
+	}
+	if verifyConnector && connectorID != "" {
+		if msg, code := verifyConnectorActiveForRequest(r, connectorID); msg != "" {
+			return nil, msg, code
+		}
+	}
+	if !githubTarget && authEnforced {
+		return nil, "connector_id and repo_full_name required under auth (shared workspace scans disabled)", 400
 	}
 	service := body.Service
 	if service == "" {
@@ -522,7 +536,7 @@ func handleSecurityRunCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", 400)
 		return
 	}
-	row, errMsg, status := createSecurityRun(r, body)
+	row, errMsg, status := createSecurityRun(r, body, true)
 	if errMsg != "" {
 		http.Error(w, errMsg, status)
 		return

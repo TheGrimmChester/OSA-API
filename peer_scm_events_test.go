@@ -17,6 +17,20 @@ func newPeerSCMMux(t *testing.T) *http.ServeMux {
 	t.Setenv("AUTH_MODE", "codeployed")
 	t.Setenv("OPA_AUTH_REQUIRED", "1")
 
+	ora := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/connectors" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"connectors": []map[string]interface{}{
+					{"id": "conn-1", "status": "active", "organization_id": "org-test"},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(ora.Close)
+	t.Setenv("PEER_ORA_URL", ora.URL)
+
 	prevGate := authGate
 	prevAuth := authEnforced
 	t.Cleanup(func() {

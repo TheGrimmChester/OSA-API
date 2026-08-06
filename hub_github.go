@@ -246,6 +246,10 @@ func handleGitHubConnectorsProxy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Defense in depth: only active connectors for the caller's Open org.
+	if status >= 200 && status < 300 {
+		raw = filterConnectorsProxyBody(raw, requestOrgID(r))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(raw)
@@ -271,6 +275,10 @@ func handleGitHubConnectorSub(w http.ResponseWriter, r *http.Request) {
 			"peer_unavailable": true,
 			"peer":             "ora-api",
 		})
+		return
+	}
+	if msg, code := verifyConnectorActiveForRequest(r, id); msg != "" {
+		http.Error(w, msg, code)
 		return
 	}
 	raw, status, err := proxyPeerGET(r.Context(), base+"/api/connectors/"+id+"/repos", r)

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	openclient "github.com/TheGrimmChester/open-client-go"
 )
 
 const (
@@ -60,14 +63,22 @@ func handlePeerSCMEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, _ := ExtractTenantContext(r, queryClient)
 	org, proj := ctx.WriteTenant()
-	if strings.TrimSpace(body.OrganizationID) != "" {
-		org = strings.TrimSpace(body.OrganizationID)
+	// Peer JWT org is authoritative — body cannot pivot into another tenant.
+	if bodyOrg := strings.TrimSpace(body.OrganizationID); bodyOrg != "" && bodyOrg != org {
+		http.Error(w, "organization_id mismatch with peer token", 403)
+		return
 	}
-	if strings.TrimSpace(body.ProjectID) != "" {
-		proj = strings.TrimSpace(body.ProjectID)
+	if bodyProj := strings.TrimSpace(body.ProjectID); bodyProj != "" {
+		proj = bodyProj
 	}
 	if !enforceWriteLocalityHTTP(w, r, org, proj) {
 		return
+	}
+	if conn := strings.TrimSpace(body.ConnectorID); conn != "" {
+		if err := verifyConnectorActiveViaService(r.Context(), conn, org); err != nil {
+			http.Error(w, "connector not available for this organization", 403)
+			return
+		}
 	}
 
 	result := evaluateDependenciesChecker(body)
@@ -181,4 +192,29 @@ func createPeerCVESecurityRun(org, proj string, body peerSCMEventBody, dispatch 
 		go runSecurityScanJob(runID, org, proj, service, "auto", scanners, "", "", repo, connectorID, body.Ref, body.PRNumber, body.CommitSHA, body.SCMJobID)
 	}
 	return runID, nil
+}
+
+// verifyConnectorActiveViaService lists ORA connectors with a service JWT scoped
+// to orgID and requires connectorID to be active under that org.
+func verifyConnectorActiveViaService(ctx context.Context, connectorID, orgID string) error {
+	connectorID = strings.TrimSpace(connectorID)
+	orgID = strings.TrimSpace(orgID)
+	if connectorID == "" || orgID == "" {
+		return fmt.Errorf("connector and org required")
+	}
+	if peerORAURL() == "" {
+		return fmt.Errorf("PEER_ORA_URL not configured")
+	}
+	cfg := openclient.PeerFromEnv("PEER_ORA_URL", "osa-api", "ora-api", "connectors:read")
+	cfg.OrgID = orgID
+	var out map[string]interface{}
+	if err := openclient.PeerJSON(ctx, cfg, http.MethodGet, "/api/connectors", nil, &out); err != nil {
+		return err
+	}
+	list, _ := out["connectors"].([]interface{})
+	filtered := filterConnectorsForOrg(list, orgID)
+	if findConnectorInList(filtered, connectorID) == nil {
+		return fmt.Errorf("connector not available")
+	}
+	return nil
 }
