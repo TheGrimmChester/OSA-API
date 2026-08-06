@@ -334,6 +334,100 @@ func (c *cveHTTPClient) nap(d time.Duration) {
 	time.Sleep(d)
 }
 
+// postJSON POSTs JSON to a URL with the same rate limiting, retries and body cap
+// as getJSON. Used for OSV /v1/query.
+func (c *cveHTTPClient) postJSON(ctx context.Context, rawURL string, payload []byte, limit int64) ([]byte, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("bad url: %w", err)
+	}
+	if !c.hostAllowed(u.Host) {
+		return nil, fmt.Errorf("host %q is not a configured CVE source", u.Host)
+	}
+	if limit <= 0 {
+		limit = cveBodyLimitDefault
+	}
+	if b := c.bucketFor(u.Host); b != nil {
+		if err := b.wait(ctx); err != nil {
+			return nil, err
+		}
+	}
+	backoff := 100 * time.Millisecond
+	const attempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if !c.budget.take() {
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, errBudgetExhausted
+		}
+		body, retryable, retryAfter, err := c.attemptPost(ctx, rawURL, payload, limit)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+		if !retryable || attempt == attempts {
+			return nil, err
+		}
+		wait := backoff
+		if retryAfter > 0 {
+			wait = retryAfter
+		}
+		if dl, ok := ctx.Deadline(); ok && time.Now().Add(wait).After(dl) {
+			return nil, fmt.Errorf("%w (retry would exceed the scan deadline)", err)
+		}
+		c.nap(wait)
+		backoff *= 2
+	}
+	return nil, lastErr
+}
+
+func (c *cveHTTPClient) attemptPost(ctx context.Context, rawURL string, payload []byte, limit int64) (body []byte, retryable bool, retryAfter time.Duration, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return nil, false, 0, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", cveUserAgent)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, false, 0, err
+		}
+		return nil, true, 0, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, false, 0, nil
+	case resp.StatusCode == http.StatusTooManyRequests,
+		resp.StatusCode == http.StatusInternalServerError,
+		resp.StatusCode == http.StatusBadGateway,
+		resp.StatusCode == http.StatusServiceUnavailable,
+		resp.StatusCode == http.StatusGatewayTimeout:
+		return nil, true, parseRetryAfter(resp.Header.Get("Retry-After")),
+			fmt.Errorf("HTTP %d from %s", resp.StatusCode, req.URL.Host)
+	case resp.StatusCode < 200 || resp.StatusCode >= 300:
+		return nil, false, 0, fmt.Errorf("HTTP %d from %s", resp.StatusCode, req.URL.Host)
+	}
+
+	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if rerr != nil {
+		return nil, true, 0, rerr
+	}
+	if int64(len(raw)) >= limit {
+		return nil, false, 0, fmt.Errorf("response from %s exceeded the %d-byte cap", req.URL.Host, limit)
+	}
+	return raw, false, 0, nil
+}
+
 // getJSON fetches a URL with rate limiting, retries and a body cap.
 //
 // Returns (nil, nil) for a definitive 404 — the caller negative-caches that. Any

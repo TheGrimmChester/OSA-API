@@ -172,6 +172,10 @@ real credential committed to a documentation page.
 
 `GET /api/peer/health` — validates service JWT (`aud=osa-api`, scope `health:read`) when `OPEN_SERVICE_JWT_SECRET` is set.
 
+## SCM checker peer
+
+`POST /api/peer/scm/events` — ORA fan-out entry for the **`dependencies`** checker (lockfile CVE via OSV). Service JWT: `iss=ora-api`, `aud=osa-api`, scope **`scm:events`**. Request/response fields match [OPA-Stack interop — SCM checker platform](https://github.com/TheGrimmChester/OPA-Stack/blob/main/docs/interop.md#peer-contract-post-apipeerscmevents). See [configuration.md](configuration.md#scm-checker-peer-post-apipeerscmevents) for trigger rules and env tuning (`OSA_CVE_*`).
+
 ## Peer-callable AppSec routes
 
 These accept **either** a user JWT (viewer+) or a service JWT (`aud=osa-api`) minted

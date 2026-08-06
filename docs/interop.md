@@ -75,7 +75,7 @@ Mint with `Open-Auth-Go` / `Open-Client-Go` peer helpers: claims `iss` (caller),
 
 | Caller → Callee | Scopes |
 |-----------------|--------|
-| ORA → OSA | `runs:write`, `findings:read`, `health:read` |
+| ORA → OSA | `runs:write`, `findings:read`, `health:read`, **`scm:events`** (SCM checker fan-out) |
 | OSA → ORA | `connectors:read` (optional; dashboard usually forwards user JWT), `scm:clone`, `health:read` |
 | OSA → OPA hub | `health:read` (optional probe) |
 
@@ -84,6 +84,7 @@ Mint with `Open-Auth-Go` / `Open-Client-Go` peer helpers: claims `iss` (caller),
 | `findings:read` | Read AppSec findings / run summaries (ORA → OSA) |
 | `runs:write` | Create/link security run from review (ORA → OSA) |
 | `scm:clone` | Request short-lived clone credentials from ORA |
+| `scm:events` | Receive SCM checker fan-out envelope from ORA (`POST /api/peer/scm/events`) |
 | `connectors:read` | List ORA connectors / repos as a peer service |
 | `traces:read` | Trace metadata for correlation (OSA → OPA) |
 | `health:read` | Peer probe |

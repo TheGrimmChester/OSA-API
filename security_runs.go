@@ -73,6 +73,7 @@ func handleSecurityProfiles(w http.ResponseWriter, r *http.Request) {
 			{"id": "iac", "mode": "stub"},
 			{"id": "container", "mode": "stub"},
 			{"id": "sbom", "mode": "lite"},
+			{"id": "cve", "mode": "osv", "note": "Lockfile-only dependency CVE scan via OSV", "aliases": []string{"dependencies"}},
 		},
 		"gitleaks": map[string]interface{}{
 			"available": secretsMode == "gitleaks",
@@ -299,15 +300,22 @@ func handleSecurityRunFindings(w http.ResponseWriter, r *http.Request, id string
 	if iac == nil {
 		iac = []map[string]interface{}{}
 	}
+	cve, _ := queryClient.Query(fmt.Sprintf(`
+		SELECT service, package_name, version, ecosystem, advisory_id, cve_id, severity, summary, security_run_id, scraped_at
+		FROM opa.cve_findings WHERE security_run_id = '%s'%s ORDER BY scraped_at DESC LIMIT 200`, rid, scope))
+	if cve == nil {
+		cve = []map[string]interface{}{}
+	}
 	writeJSON(w, map[string]interface{}{
 		"security_run_id": id,
 		"counts": map[string]int{
 			"secrets": count("secret_findings"),
 			"sast":    count("sast_findings"),
 			"iac":     count("iac_findings"),
+			"cve":     count("cve_findings"),
 		},
 		"findings": map[string]interface{}{
-			"secrets": secrets, "sast": sast, "iac": iac,
+			"secrets": secrets, "sast": sast, "iac": iac, "cve": cve,
 		},
 	})
 }
@@ -521,6 +529,8 @@ func runSecurityScanJob(runID, org, proj, service, profile string, scanners []st
 			n, e = scanContainerStub(runID, org, proj, service, root, image)
 		case "sbom":
 			n, e = scanSBOMLite(runID, org, proj, service, root)
+		case "cve":
+			n, e = scanCVE(runID, org, proj, service, root, ref, pr, sha)
 		}
 		counts[s] = n
 		if e != nil && firstErr == nil {

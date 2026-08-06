@@ -38,6 +38,7 @@ func main() {
 	ensureClickHouseDatabase(queryClient)
 	ensureSecuritySchema(queryClient)
 	backfillLegacySecurityTablesOnBoot()
+	initCVEStack()
 	initAuthMode()
 
 	authRequired := authRequiredEnv()
@@ -81,6 +82,7 @@ func main() {
 	registerAppSecDeepMux(mux, authView, authAdmin)
 	registerVulnMux(mux, authView, authAdmin)
 	registerGateMux(mux, authView, authAdmin)
+	registerPeerSCMEventsMux(mux)
 	registerServiceAuthProbe(mux)
 
 	srv := &http.Server{

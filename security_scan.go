@@ -111,6 +111,8 @@ func normalizeSecurityScanners(in []string) []string {
 			s = "container"
 		case "sbom", "vulns", "vuln":
 			s = "sbom"
+		case "cve", "dependencies", "deps", "osv":
+			s = "cve"
 		case "iast":
 			continue // runtime-only
 		case "":
@@ -137,7 +139,7 @@ func securityProfileScanners(profile string) []string {
 	case "iac":
 		return []string{"iac", "secrets"}
 	case "full":
-		return []string{"secrets", "sast", "iac", "container", "sbom"}
+		return []string{"secrets", "sast", "iac", "container", "sbom", "cve"}
 	case "auto", "":
 		return nil
 	default:
@@ -147,7 +149,7 @@ func securityProfileScanners(profile string) []string {
 
 func detectSecurityScanners(root, image string) []string {
 	out := []string{"secrets"}
-	hasJS, hasPHP, hasDocker, hasTF, hasPkg := false, false, false, false, false
+	hasJS, hasPHP, hasDocker, hasTF, hasLock := false, false, false, false, false
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d == nil {
 			return nil
@@ -169,8 +171,10 @@ func detectSecurityScanners(root, image string) []string {
 			hasDocker = true
 		case ext == ".tf":
 			hasTF = true
-		case name == "package.json" || name == "composer.json" || name == "go.mod" || name == "requirements.txt":
-			hasPkg = true
+		default:
+			if isDependencyLockPath(path) {
+				hasLock = true
+			}
 		}
 		return nil
 	})
@@ -183,8 +187,8 @@ func detectSecurityScanners(root, image string) []string {
 	if image != "" || hasDocker {
 		out = append(out, "container")
 	}
-	if hasPkg {
-		out = append(out, "sbom")
+	if hasLock {
+		out = append(out, "cve")
 	}
 	return normalizeSecurityScanners(out)
 }
