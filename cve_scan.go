@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
+
+	opencache "github.com/TheGrimmChester/open-cache-go"
 )
 
 const (
@@ -16,7 +19,7 @@ const (
 )
 
 var (
-	cveCacheInst cveCache
+	cveCacheInst *opencache.Layered
 	cveHTTPInst  *cveHTTPClient
 	cveFlight    *singleflight
 	osvAPIBase   = "https://api.osv.dev"
@@ -31,12 +34,16 @@ func initCVEStack() {
 	cveHTTPInst.limit(osvAPIBase, 5, 10)
 
 	l1Max := clampInt(atoiDefault(envOr("OSA_CVE_L1_CACHE", "20000"), 20000), 1000, 100000)
-	l1 := newMemCache(l1Max)
-	var l2 *redisCache
-	if rc, err := parseRedisURL(os.Getenv("REDIS_URL")); err == nil {
-		l2 = rc
+	lc, err := opencache.NewLayered(opencache.Config{
+		RedisURL:  os.Getenv("REDIS_URL"),
+		L1Max:     l1Max,
+		KeyPrefix: strings.TrimSpace(os.Getenv("OSA_SEC_KEY_PREFIX")),
+	})
+	if err != nil {
+		log.Printf("[WARN] cve cache: invalid REDIS_URL (%v); continuing memory-only", err)
+		lc, _ = opencache.NewLayered(opencache.Config{L1Max: l1Max})
 	}
-	cveCacheInst = newLayeredCache(l1, l2)
+	cveCacheInst = lc
 	cveFlight = newSingleflight()
 }
 
@@ -94,7 +101,7 @@ func queryOSV(ctx context.Context, eco, pkg, version string) ([]osvVuln, error) 
 	}
 	key := osvCacheKey(eco, pkg, version)
 	if raw, ok := cveCacheInst.Get(ctx, key); ok {
-		if isNegativeEntry(raw) {
+		if opencache.IsNegativeEntry(raw) {
 			return nil, nil
 		}
 		var out osvQueryResponse
@@ -115,24 +122,24 @@ func queryOSV(ctx context.Context, eco, pkg, version string) ([]osvVuln, error) 
 			return nil, err
 		}
 		if len(resp) == 0 {
-			cveCacheInst.Set(ctx, key, negativeEntry, osvNegativeCacheTTL)
-			return negativeEntry, nil
+			cveCacheInst.SetPlain(ctx, key, opencache.NegativeEntry, osvNegativeCacheTTL)
+			return opencache.NegativeEntry, nil
 		}
 		var parsed osvQueryResponse
 		if json.Unmarshal(resp, &parsed) != nil {
 			return resp, nil
 		}
 		if len(parsed.Vulns) == 0 {
-			cveCacheInst.Set(ctx, key, negativeEntry, osvNegativeCacheTTL)
-			return negativeEntry, nil
+			cveCacheInst.SetPlain(ctx, key, opencache.NegativeEntry, osvNegativeCacheTTL)
+			return opencache.NegativeEntry, nil
 		}
-		cveCacheInst.Set(ctx, key, resp, osvPositiveCacheTTL)
+		cveCacheInst.SetPlain(ctx, key, resp, osvPositiveCacheTTL)
 		return resp, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if isNegativeEntry(raw) {
+	if opencache.IsNegativeEntry(raw) {
 		return nil, nil
 	}
 	var out osvQueryResponse

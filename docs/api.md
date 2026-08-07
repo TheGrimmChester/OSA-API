@@ -12,7 +12,7 @@ Smoke listen address: `:8093`. Health `service` id: `osa-api`.
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/hub/organizations` | Proxy hub tenancy orgs (`PEER_OPA_URL`) |
-| GET | `/api/oam/projects` | Proxy OAM projects (`PEER_OAM_URL`); `?organization_id=` filters |
+| GET | `/api/oam/projects` | Proxy OAM projects (`PEER_OAM_URL`); `?organization_id=` and `?product=osa` filter (enabled-only for that product) |
 | GET | `/api/hub/github/status` | Hub GitHub status + OSA peer config |
 | GET | `/api/github/connectors` | Proxy ORA connectors (`PEER_ORA_URL`) |
 | GET | `/api/github/connectors/{id}/repos` | Proxy ORA repo list |
@@ -36,6 +36,15 @@ so `id` stays valid for existing callers:
 `organization_id=all` is dropped rather than forwarded: `all` is the tenant-header
 sentinel for "unscoped", while OAM's filter is a concrete-id predicate, so passing
 it through would return zero projects on the selection meant to widen the list.
+
+`product=osa` (or another family code) forwards to OAM so the picker only lists
+projects that are not in that product's `disabled_products` denylist. Enablement
+writes stay on OAM Dashboard → oam-api (no peer write proxy).
+
+Job/scan fail-closed hook: before starting a scan for a concrete OAM directory
+id, call `GET /api/oam/projects?product=osa` (or OAM directly) and reject when
+the id is absent; skip when `PEER_OAM_URL` is unset or the project header is
+empty/`all`.
 
 With `PEER_OAM_URL` unset, `/api/oam/projects` returns an empty list plus
 `peer_unavailable: true` — the picker is empty, not broken.

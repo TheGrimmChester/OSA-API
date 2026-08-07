@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	opencache "github.com/TheGrimmChester/open-cache-go"
 )
 
 func TestPostJSONRetriesLikeGet(t *testing.T) {
@@ -50,7 +52,7 @@ func TestQueryOSVUsesCache(t *testing.T) {
 	cveHTTPInst = newCVEHTTPClient(5e9, newCVEBudget(10))
 	cveHTTPInst.allowHost(srv.URL)
 	osvAPIBase = srv.URL
-	cveCacheInst = newLayeredCache(newMemCache(100), nil)
+	cveCacheInst, _ = opencache.NewLayered(opencache.Config{L1Max: 100})
 	cveFlight = newSingleflight()
 
 	ctx := context.Background()
@@ -88,7 +90,7 @@ func TestScanCVEFromLockfileWithFakeOSV(t *testing.T) {
 	cveHTTPInst = newCVEHTTPClient(5e9, newCVEBudget(50))
 	cveHTTPInst.allowHost(srv.URL)
 	osvAPIBase = srv.URL
-	cveCacheInst = newLayeredCache(newMemCache(100), nil)
+	cveCacheInst, _ = opencache.NewLayered(opencache.Config{L1Max: 100})
 	cveFlight = newSingleflight()
 	writer = nil
 

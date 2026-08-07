@@ -99,15 +99,12 @@ func handleOAMProjects(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	target := base + "/api/projects"
 	// "all" is the tenant-header sentinel for unscoped, not an org id. OAM's
 	// organization_id filter is a concrete-id predicate, so forwarding the
 	// sentinel would emit `organization_id = 'all'` and empty the picker on the
 	// very selection that is meant to widen it. Omitting it lets OAM scope by
-	// actor instead.
-	if org := strings.TrimSpace(r.URL.Query().Get("organization_id")); org != "" && !strings.EqualFold(org, "all") {
-		target += "?organization_id=" + url.QueryEscape(org)
-	}
+	// actor instead. `product` filters disabled_products (empty denylist = all on).
+	target := oamProjectsTarget(base, r.URL.Query())
 	raw, status, err := proxyPeerGET(r.Context(), target, r)
 	if err != nil {
 		writeJSON(w, map[string]interface{}{
@@ -120,6 +117,27 @@ func handleOAMProjects(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(aliasDirectoryIDs(raw, "projects", "project_id"))
+}
+
+// oamProjectsTarget builds GET {base}/api/projects with picker query params.
+//
+// Fail-closed hook (jobs/scans): before enqueueing work for a concrete OAM
+// directory id, call the same upstream with ?product=osa and reject when the
+// id is absent from projects[]. Skip when PEER_OAM_URL is unset or the project
+// header is empty/"all". Enablement writes stay on OAM only.
+func oamProjectsTarget(base string, q url.Values) string {
+	target := strings.TrimRight(base, "/") + "/api/projects"
+	vals := url.Values{}
+	if org := strings.TrimSpace(q.Get("organization_id")); org != "" && !strings.EqualFold(org, "all") {
+		vals.Set("organization_id", org)
+	}
+	if product := strings.TrimSpace(q.Get("product")); product != "" {
+		vals.Set("product", product)
+	}
+	if enc := vals.Encode(); enc != "" {
+		target += "?" + enc
+	}
+	return target
 }
 
 // aliasDirectoryIDs adds the dashboard's field name to each row of a proxied

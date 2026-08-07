@@ -133,6 +133,9 @@ func handleSecurityRunsBatch(w http.ResponseWriter, r *http.Request) {
 // When verifyConnector is true and connector_id is set, the connector must be active
 // under the caller's org (batch verifies once up-front and passes false).
 func createSecurityRun(r *http.Request, body securityRunCreateBody, verifyConnector bool) (map[string]interface{}, string, int) {
+	if st, msg := requireEnabledOAMProject(r, "osa"); st != 0 {
+		return nil, msg, st
+	}
 	ctx, _ := ExtractTenantContext(r, queryClient)
 	org, proj := ctx.WriteTenant()
 	if !enforceWriteLocalityHTTP(nil, r, org, proj) {
@@ -140,6 +143,12 @@ func createSecurityRun(r *http.Request, body securityRunCreateBody, verifyConnec
 	}
 	repo := strings.TrimSpace(body.RepoFullName)
 	connectorID := strings.TrimSpace(body.ConnectorID)
+	if filledCID, filledRepo, errMsg, code := resolveSCMFromOAMProject(r, connectorID, repo); errMsg != "" {
+		return nil, errMsg, code
+	} else {
+		connectorID = filledCID
+		repo = filledRepo
+	}
 	githubTarget := repo != "" && connectorID != ""
 	if repo != "" && connectorID == "" {
 		return nil, "connector_id required with repo_full_name", 400

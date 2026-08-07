@@ -11,7 +11,7 @@
 | `CLICKHOUSE_DB` | `osa` | Product database. Alias: `CLICKHOUSE_DATABASE`. Startup creates this DB and OSA security tables (`security_runs`, `*_findings`, `service_dependencies`) if missing. |
 | `PEER_OPA_URL` | `` | OPA hub URL — org/tenancy discovery |
 | `PEER_ORA_URL` | `` | ORA API URL — GitHub connectors and clone credentials |
-| `PEER_OAM_URL` | `` | OAM API URL — project picker (`GET /api/oam/projects`) |
+| `PEER_OAM_URL` | `` | OAM API URL — project picker (`GET /api/oam/projects?product=osa`) |
 | `OSA_SECURITY_WORKSPACE` | `/workspace` | **Fallback** scan root for CI/path scans without `connector_id`/`repo_full_name` |
 | `OSA_SECURITY_INGEST_TOKEN` | `` | CI ingest token for `/v1/security/*` |
 | `OSA_PUBLIC_URL` | `` | Public URL for this product |
@@ -20,7 +20,9 @@
 | `OSA_CVE_L1_CACHE` | `20000` | In-memory CVE response cache entries |
 | `OSA_RUNNER_TAG` | `smoke` | Runner image tag (`smoke` or `nas`) |
 | `ORCHESTRATOR_LISTEN_ADDR` | `:8095` | Orchestrator health listen |
-| `OPA_JOB_SANDBOX` | `off` | Set `docker` when orchestrator spawns `osa-runner-scan` |
+| `REDIS_URL` | empty | Dedicated `redis-osa` for OSV CVE L2 cache (`GET /api/security/cve/status` reports backend) |
+| `OSA_SEC_KEY_PREFIX` | empty | Optional Redis key prefix (defaults to product prefix inside Open-Cache-Go) |
+| `OPA_JOB_SANDBOX` | `off` | Set `docker` on NAS to run gitleaks inside `osa-runner-scan` with curated env (Open-Job-Env-Go) |
 
 ## GitHub App / PAT setup
 
