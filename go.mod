@@ -7,15 +7,17 @@ require (
 	github.com/TheGrimmChester/open-cache-go v0.0.0
 	github.com/TheGrimmChester/open-clickhouse-go v0.2.0
 	github.com/TheGrimmChester/open-client-go v0.0.0-20260803093649-eb6d2f7a2423
-	github.com/TheGrimmChester/open-crypto-go v0.0.0
 	github.com/TheGrimmChester/open-http-go v0.0.0-20260804055231-a9462e336412
 	github.com/TheGrimmChester/open-job-env-go v0.0.0
 	github.com/TheGrimmChester/open-job-go v0.0.0-20260803091535-04d163946627
 	github.com/TheGrimmChester/open-logger-go v0.2.0
-	github.com/TheGrimmChester/open-tenant-go v0.2.2
+	github.com/TheGrimmChester/open-tenant-go v0.3.1
 )
 
-require github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+require (
+	github.com/TheGrimmChester/open-crypto-go v0.0.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+)
 
 // The family libraries were wired with filesystem replaces (=> ../Open-Auth-Go).
 // Those resolve in a developer tree but not in a single-repo checkout, so every
@@ -33,6 +35,11 @@ require github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 // alone. This replace maps that dead version onto a real commit. Drop it once
 // open-client-go is republished requiring a resolvable version.
 replace github.com/TheGrimmChester/open-auth-go => ../Open-Auth-Go
+
 replace github.com/TheGrimmChester/open-cache-go => ../Open-Cache-Go
+
 replace github.com/TheGrimmChester/open-crypto-go => ../Open-Crypto-Go
+
 replace github.com/TheGrimmChester/open-job-env-go => ../Open-Job-Env-Go
+
+replace github.com/TheGrimmChester/open-tenant-go => ../Open-Tenant-Go
