@@ -145,11 +145,18 @@ func handleVulnMatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
+	org := requestOrgID(r)
+	if org == "" {
+		http.Error(w, "organization_id required", http.StatusBadRequest)
+		return
+	}
+	proj := strings.TrimSpace(r.Header.Get("X-Project-ID"))
+	if strings.EqualFold(proj, tenantAll) {
+		proj = ""
+	}
 	service := r.URL.Query().Get("service")
 	release := r.URL.Query().Get("release")
 	ecosystem := r.URL.Query().Get("ecosystem")
-	org := r.Header.Get("X-Organization-Id")
-	proj := r.Header.Get("X-Project-Id")
 	n := matchAdvisoriesForService(org, proj, service, release, ecosystem)
 	writeJSON(w, map[string]interface{}{"ok": true, "findings_upserted": n})
 }
@@ -158,7 +165,11 @@ func matchAdvisoriesForService(org, proj, service, release, ecosystem string) in
 	if queryClient == nil {
 		return 0
 	}
-	where := "1=1"
+	org = strings.TrimSpace(org)
+	if org == "" || strings.EqualFold(org, tenantAll) {
+		return 0
+	}
+	where := fmt.Sprintf("organization_id = '%s'", escapeSQL(org))
 	if service != "" {
 		where += fmt.Sprintf(" AND service = '%s'", escapeSQL(service))
 	}
@@ -168,8 +179,8 @@ func matchAdvisoriesForService(org, proj, service, release, ecosystem string) in
 	if ecosystem != "" {
 		where += fmt.Sprintf(" AND ecosystem = '%s'", escapeSQL(strings.ToLower(ecosystem)))
 	}
-	if org != "" {
-		where += fmt.Sprintf(" AND organization_id = '%s'", escapeSQL(org))
+	if proj != "" {
+		where += fmt.Sprintf(" AND project_id = '%s'", escapeSQL(proj))
 	}
 	rows, err := queryClient.Query(fmt.Sprintf(`
 		SELECT organization_id, project_id, service, release, ecosystem, package_name, version
