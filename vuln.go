@@ -86,6 +86,12 @@ func handleSBOMIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
+	// Same production posture as /v1/security/*: require ingest token or session
+	// when AUTH_REQUIRED is on; open only in local/dev with no token configured.
+	if !securityIngestAuthorized(r) {
+		http.Error(w, "unauthorized — set Bearer / X-OSA-Security-Token (mint via session or OSA_SECURITY_INGEST_TOKEN)", 401)
+		return
+	}
 	body := http.MaxBytesReader(w, r.Body, 8<<20)
 	defer body.Close()
 	var payload struct {
@@ -112,6 +118,10 @@ func handleSBOMIngest(w http.ResponseWriter, r *http.Request) {
 	proj := payload.ProjectID
 	if org == "" {
 		org, proj = tenantFromRequest(r)
+	}
+	if authEnforced && (strings.TrimSpace(org) == "" || strings.EqualFold(strings.TrimSpace(org), tenantAll)) {
+		http.Error(w, "X-Organization-ID required", 400)
+		return
 	}
 	if !enforceWriteLocalityHTTP(w, r, org, proj) {
 		return

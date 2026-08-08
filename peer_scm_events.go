@@ -18,7 +18,8 @@ const (
 )
 
 func registerPeerSCMEventsMux(mux *http.ServeMux) {
-	registerPeerAuth(mux, "/api/peer/scm/events", "scm:events", "scm:events", handlePeerSCMEvents)
+	// Service-JWT-only: dashboard/hub user JWTs must not fan-in SCM scan triggers.
+	registerPeerServiceAuth(mux, "/api/peer/scm/events", "scm:events", handlePeerSCMEvents)
 }
 
 type peerSCMEventBody struct {

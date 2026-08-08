@@ -148,6 +148,28 @@ func TestPeerSCMEventsRejectsWrongScope(t *testing.T) {
 	}
 }
 
+// Peer SCM events is service-JWT-only — a hub/dashboard user JWT must not trigger scans.
+func TestPeerSCMEventsRejectsUserJWT(t *testing.T) {
+	mux := newPeerSCMMux(t)
+	userTok, err := openauth.MintUserJWT([]byte(testUserSecret), "admin", "admin", "osa-api", 0)
+	if err != nil {
+		t.Fatalf("mint user jwt: %v", err)
+	}
+	body := map[string]interface{}{
+		"event_type": "pull_request", "connector_id": "conn-1",
+		"repo_full_name": "acme/app", "changed_paths": []string{"package-lock.json"},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/peer/scm/events", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+userTok)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("user JWT must be rejected: code=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestNormalizeSecurityScannersCVE(t *testing.T) {
 	got := normalizeSecurityScanners([]string{"dependencies", "OSV", "cve"})
 	if len(got) != 1 || got[0] != "cve" {

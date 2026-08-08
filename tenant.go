@@ -74,6 +74,13 @@ func ExtractTenantContext(r *http.Request, queryClient *ClickHouseQuery) (*Tenan
 
 func tenantScopeSQL(r *http.Request, q *ClickHouseQuery, prefix string) string {
 	ctx, _ := ExtractTenantContext(r, q)
+	if ctx == nil {
+		// Align with Open-Tenant ScopePredicate: empty org under auth → (1=0).
+		if authEnforced {
+			return " AND (1=0)"
+		}
+		return ""
+	}
 	return ctx.ScopeAnd(prefix)
 }
 

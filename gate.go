@@ -25,14 +25,22 @@ func handleSecurityGate(w http.ResponseWriter, r *http.Request) {
 	}
 	runID := strings.TrimSpace(r.URL.Query().Get("security_run_id"))
 	minSev := nz(strings.TrimSpace(r.URL.Query().Get("min_severity")), "high")
+	projFilter := strings.TrimSpace(r.Header.Get("X-Project-ID"))
+	if strings.EqualFold(projFilter, tenantAll) {
+		projFilter = ""
+	}
 	if r.Method == http.MethodPost {
 		var body struct {
 			SecurityRunID string `json:"security_run_id"`
 			MinSeverity   string `json:"min_severity"`
+			ProjectID     string `json:"project_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		runID = nz(body.SecurityRunID, runID)
 		minSev = nz(body.MinSeverity, minSev)
+		if p := strings.TrimSpace(body.ProjectID); p != "" {
+			projFilter = p
+		}
 	}
 	if runID == "" {
 		http.Error(w, "security_run_id required", 400)
@@ -43,13 +51,25 @@ func handleSecurityGate(w http.ResponseWriter, r *http.Request) {
 	if org != nil {
 		orgID, _ = org.WriteTenant()
 	}
-	writeJSON(w, evaluateScopedGate(orgID, runID, minSev))
+	orgID = strings.TrimSpace(orgID)
+	if authEnforced && orgID == "" {
+		http.Error(w, "X-Organization-ID required", 400)
+		return
+	}
+	writeJSON(w, evaluateScopedGate(orgID, projFilter, runID, minSev))
 }
 
-func evaluateScopedGate(org, runID, minSev string) map[string]interface{} {
+func evaluateScopedGate(org, proj, runID, minSev string) map[string]interface{} {
 	fail := false
 	reasons := []string{}
 	softNotes := []string{}
+	if authEnforced && strings.TrimSpace(org) == "" {
+		// Fail closed: never evaluate foreign runs without a concrete org.
+		return map[string]interface{}{
+			"status": "fail", "fail": true, "reasons": []string{"organization required"},
+			"scope": "security_run", "security_run_id": runID, "min_severity": minSev,
+		}
+	}
 	if queryClient != nil && runID != "" {
 		sevFilter := "severity IN ('critical','high')"
 		switch strings.ToLower(minSev) {
@@ -61,8 +81,17 @@ func evaluateScopedGate(org, runID, minSev string) map[string]interface{} {
 			sevFilter = "1=1"
 		}
 		rid := escapeSQL(runID)
+		tenantSQL := ""
+		if org != "" {
+			tenantSQL += fmt.Sprintf(" AND organization_id = '%s'", escapeSQL(org))
+		}
+		if proj != "" {
+			tenantSQL += fmt.Sprintf(" AND project_id = '%s'", escapeSQL(proj))
+		}
 		for _, table := range []string{"secret_findings", "sast_findings", "iac_findings"} {
-			rows, err := queryClient.Query(fmt.Sprintf(`SELECT count() AS c FROM opa.%s WHERE security_run_id = '%s' AND %s`, table, rid, sevFilter))
+			rows, err := queryClient.Query(fmt.Sprintf(
+				`SELECT count() AS c FROM opa.%s WHERE security_run_id = '%s'%s AND %s`,
+				table, rid, tenantSQL, sevFilter))
 			if err == nil && len(rows) > 0 && getFloat64(rows[0], "c") > 0 {
 				fail = true
 				reasons = append(reasons, table+" findings present")
@@ -71,11 +100,40 @@ func evaluateScopedGate(org, runID, minSev string) map[string]interface{} {
 	}
 	if !fail {
 		if live := liveSecurityRun(runID); live != nil {
+			if org != "" {
+				liveOrg := strings.TrimSpace(fmt.Sprint(live["organization_id"]))
+				if liveOrg != "" && liveOrg != org {
+					// Fail closed: never treat a foreign-tenant run as a clean pass
+					// (and never surface its summary_json findings).
+					out := map[string]interface{}{
+						"status": "fail", "fail": true,
+						"reasons":         []string{"run not in organization scope"},
+						"scope":           "security_run",
+						"security_run_id": runID,
+						"min_severity":    minSev,
+						"organization_id": org,
+					}
+					if proj != "" {
+						out["project_id"] = proj
+					}
+					return out
+				}
+			}
+			if proj != "" {
+				liveProj := strings.TrimSpace(fmt.Sprint(live["project_id"]))
+				if liveProj != "" && liveProj != proj {
+					return map[string]interface{}{
+						"status": "pass", "fail": false, "reasons": []string{},
+						"scope": "security_run", "security_run_id": runID, "min_severity": minSev,
+						"note": "run not in project scope",
+					}
+				}
+			}
 			if sj, _ := live["summary_json"].(string); sj != "" {
 				var sm struct {
-					Counts          map[string]int            `json:"counts"`
-					SeverityCounts  map[string]map[string]int `json:"severity_counts"`
-					FilteredSecrets int                       `json:"secrets_filtered_fp"`
+					Counts         map[string]int            `json:"counts"`
+					SeverityCounts map[string]map[string]int `json:"severity_counts"`
+					FilteredSecrets int                      `json:"secrets_filtered_fp"`
 				}
 				_ = json.Unmarshal([]byte(sj), &sm)
 				if blocking := liveBlockingCount(sm.SeverityCounts, "secrets", minSev); blocking > 0 {
@@ -101,10 +159,15 @@ func evaluateScopedGate(org, runID, minSev string) map[string]interface{} {
 	if fail {
 		status = "fail"
 	}
-	_ = org
 	out := map[string]interface{}{
 		"status": status, "fail": fail, "reasons": reasons, "scope": "security_run",
 		"security_run_id": runID, "min_severity": minSev,
+	}
+	if org != "" {
+		out["organization_id"] = org
+	}
+	if proj != "" {
+		out["project_id"] = proj
 	}
 	if len(softNotes) > 0 {
 		out["soft_notes"] = softNotes

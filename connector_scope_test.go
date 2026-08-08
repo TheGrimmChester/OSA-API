@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+func TestRequestOrgIDFailClosed(t *testing.T) {
+	if got := requestOrgID(nil); got != "" {
+		t.Fatalf("nil request: got %q", got)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/x", nil)
+	if got := requestOrgID(req); got != "" {
+		t.Fatalf("missing org header: got %q want empty", got)
+	}
+	req.Header.Set("X-Organization-ID", "all")
+	if got := requestOrgID(req); got != "" {
+		t.Fatalf("all org: got %q want empty", got)
+	}
+	req.Header.Set("X-Organization-ID", "nas")
+	if got := requestOrgID(req); got != "nas" {
+		t.Fatalf("concrete org: got %q", got)
+	}
+}
+
 func TestConnectorActiveUnderOrg(t *testing.T) {
 	cases := []struct {
 		name string

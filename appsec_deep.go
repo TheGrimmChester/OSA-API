@@ -56,7 +56,13 @@ func securityIngestAuthorized(r *http.Request) bool {
 		return true
 	}
 	if want == "" && !oidcRequire {
-		return true // open ingest when no token configured (local/dev)
+		// Lab/dev: open ingest when no token is configured.
+		// Production posture (AUTH_REQUIRED / OPA_AUTH_REQUIRED) fails closed —
+		// require OSA_SECURITY_INGEST_TOKEN or a viewer session.
+		if authEnforced || authRequiredEnv() {
+			return false
+		}
+		return true
 	}
 	return false
 }
