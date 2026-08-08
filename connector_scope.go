@@ -9,14 +9,20 @@ import (
 )
 
 // requestOrgID is the Open org this request may use for connector tenancy.
-// WriteTenant collapses empty/"all" to default-org so lists and verifies match
-// create-run stamps.
+// Nil context or empty/"all" org → "" (fail closed). Never invent default-org;
+// connectorActiveUnderOrg rejects empty org IDs so verifies/lists stay empty.
 func requestOrgID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
 	ctx, _ := ExtractTenantContext(r, queryClient)
 	if ctx == nil {
-		return defaultOrgID
+		return ""
 	}
-	org, _ := ctx.WriteTenant()
+	org := strings.TrimSpace(ctx.OrganizationID)
+	if org == "" || strings.EqualFold(org, tenantAll) {
+		return ""
+	}
 	return org
 }
 
