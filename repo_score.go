@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Scanners that contribute to the repository composite score.
@@ -215,24 +217,6 @@ func loadRepoScoreCached(org, proj, repo string) *RepoScoreState {
 	return &cp
 }
 
-func listRepoScoresCached(org, proj string) []*RepoScoreState {
-	repoScoreMu.RLock()
-	defer repoScoreMu.RUnlock()
-	out := []*RepoScoreState{}
-	for _, s := range repoScoreCache {
-		if s.OrganizationID == org && s.ProjectID == proj {
-			cp := *s
-			scanners := make(map[string]ScannerFacet, len(s.Scanners))
-			for k, v := range s.Scanners {
-				scanners[k] = v
-			}
-			cp.Scanners = scanners
-			out = append(out, &cp)
-		}
-	}
-	return out
-}
-
 func parseScannersJSON(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "[]" {
@@ -262,4 +246,129 @@ func severityCountsFromSummary(summaryJSON string) (map[string]map[string]int, m
 		counts = body.Counts
 	}
 	return sev, counts
+}
+
+func decodeRepoScoreRow(row map[string]interface{}) *RepoScoreState {
+	repo := getString(row, "repo_full_name")
+	if repo == "" {
+		return nil
+	}
+	s := emptyRepoScoreState(getString(row, "organization_id"), getString(row, "project_id"), repo)
+	s.UpdatedAt = getString(row, "updated_at")
+	s.LastRunID = getString(row, "last_run_id")
+	s.ProblemCount = int(getFloat64(row, "problem_count"))
+	if raw := row["score"]; raw != nil {
+		if f, ok := asFloat(raw); ok && f >= 0 {
+			s.Score = &f
+		}
+	}
+	raw := getString(row, "scanners_json")
+	if raw != "" && raw != "{}" {
+		var facets map[string]ScannerFacet
+		if json.Unmarshal([]byte(raw), &facets) == nil {
+			for id, f := range facets {
+				s.Scanners[id] = f
+			}
+		}
+	}
+	s.Score, s.ProblemCount = compositeScore(s.Scanners)
+	return s
+}
+
+func asFloat(v interface{}) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case string:
+		if t == "" || t == "null" {
+			return 0, false
+		}
+		var f float64
+		if _, err := fmt.Sscanf(t, "%f", &f); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+func loadRepoScore(org, proj, repo string) *RepoScoreState {
+	cached := loadRepoScoreCached(org, proj, repo)
+	if queryClient == nil {
+		return cached
+	}
+	db := clickHouseDatabase()
+	rows, err := queryClient.Query(fmt.Sprintf(`
+		SELECT organization_id, project_id, repo_full_name, score, scanners_json, problem_count, updated_at, last_run_id
+		FROM %s.repo_security_scores
+		WHERE organization_id = '%s' AND project_id = '%s' AND repo_full_name = '%s'
+		ORDER BY updated_at DESC LIMIT 1`,
+		db, escapeSQL(org), escapeSQL(proj), escapeSQL(repo)))
+	if err != nil || len(rows) == 0 {
+		return cached
+	}
+	fromCH := decodeRepoScoreRow(rows[0])
+	if fromCH == nil {
+		return cached
+	}
+	if cached != nil && cached.UpdatedAt > fromCH.UpdatedAt {
+		return cached
+	}
+	return fromCH
+}
+
+func persistRepoScore(state *RepoScoreState) {
+	if state == nil {
+		return
+	}
+	rememberRepoScore(state)
+	if writer == nil {
+		return
+	}
+	scoreVal := float64(-1)
+	if state.Score != nil {
+		scoreVal = *state.Score
+	}
+	scannersJSON, _ := json.Marshal(state.Scanners)
+	row := map[string]interface{}{
+		"organization_id": state.OrganizationID,
+		"project_id":      state.ProjectID,
+		"repo_full_name":  state.RepoFullName,
+		"score":           scoreVal,
+		"scanners_json":   string(scannersJSON),
+		"problem_count":   state.ProblemCount,
+		"updated_at":      state.UpdatedAt,
+		"last_run_id":     state.LastRunID,
+	}
+	payload, _ := json.Marshal(row)
+	writer.insertAsync("repo_security_scores", append(payload, '\n'))
+}
+
+// updateRepoScoreAfterRun merges scanner facets from a finished run into the rollup.
+func updateRepoScoreAfterRun(org, proj, repo, runID, summaryJSON string, scanners []string, finishedAt string) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || !strings.Contains(repo, "/") {
+		return
+	}
+	if finishedAt == "" {
+		finishedAt = time.Now().UTC().Format("2006-01-02 15:04:05.000")
+	}
+	mu := repoScoreUpdateLock(org, proj, repo)
+	mu.Lock()
+	defer mu.Unlock()
+	sev, counts := severityCountsFromSummary(summaryJSON)
+	prev := loadRepoScore(org, proj, repo)
+	next := mergeScannerFacets(prev, org, proj, repo, runID, finishedAt, scanners, sev, counts)
+	if next == prev {
+		return
+	}
+	persistRepoScore(next)
 }
