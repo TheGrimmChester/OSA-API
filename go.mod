@@ -41,8 +41,5 @@ replace github.com/TheGrimmChester/open-cache-go => ../Open-Cache-Go
 replace github.com/TheGrimmChester/open-crypto-go => ../Open-Crypto-Go
 
 replace github.com/TheGrimmChester/open-job-env-go => ../Open-Job-Env-Go
-<<<<<<< Updated upstream
 
-=======
->>>>>>> Stashed changes
 replace github.com/TheGrimmChester/open-tenant-go => ../Open-Tenant-Go
