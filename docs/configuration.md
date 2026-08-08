@@ -11,8 +11,7 @@
 | `CLICKHOUSE_DB` | `osa` | Product database. Alias: `CLICKHOUSE_DATABASE`. Startup creates this DB and OSA security tables (`security_runs`, `*_findings`, `service_dependencies`) if missing. |
 | `PEER_OPA_URL` | `` | OPA hub URL — org/tenancy discovery |
 | `PEER_ORA_URL` | `` | ORA API URL — GitHub connectors and clone credentials |
-| `PEER_OAM_URL` | `` | OAM API URL — project picker (`GET /api/oam/projects?product=osa`) |
-| `OSA_SECURITY_WORKSPACE` | `/workspace` | **Fallback** scan root for CI/path scans without `connector_id`/`repo_full_name` |
+| `PEER_OAM_URL` | `` | OAM API URL — project picker (`GET /api/oam/projects?product=osa`)  With `OPA_AUTH_REQUIRED`, unset `PEER_OAM_URL` → tenant middleware **503** (no `opa.organizations` fallback). || `OSA_SECURITY_WORKSPACE` | `/workspace` | **Fallback** scan root for CI/path scans without `connector_id`/`repo_full_name` |
 | `OSA_SECURITY_INGEST_TOKEN` | `` | CI ingest token for `/v1/security/*` |
 | `OSA_PUBLIC_URL` | `` | Public URL for this product |
 | `OSA_CVE_BUDGET` | `600` | Max OSV API requests per CVE scan |

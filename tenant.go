@@ -84,6 +84,8 @@ func AddTenantContext(r *http.Request, ctx *TenantContext) {
 	ctx.Apply(r)
 }
 
+const tenantOAMRequiredMsg = "PEER_OAM_URL required when auth enabled"
+
 func TenantMiddleware(handler http.HandlerFunc, queryClient *ClickHouseQuery) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, err := ExtractTenantContext(r, queryClient)
@@ -92,9 +94,15 @@ func TenantMiddleware(handler http.HandlerFunc, queryClient *ClickHouseQuery) ht
 			return
 		}
 
+		// Family / NAS: OAM is the directory SoT — skip legacy opa.organizations checks.
 		if peerOAMURL() != "" {
 			AddTenantContext(r, ctx)
 			handler(w, r)
+			return
+		}
+		// Auth-on without OAM must not fall back to CH opa.* directory (stale / invent risk).
+		if authEnforced {
+			http.Error(w, tenantOAMRequiredMsg, http.StatusServiceUnavailable)
 			return
 		}
 
